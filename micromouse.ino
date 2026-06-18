@@ -22,9 +22,6 @@ Motor leftMotor(LEFT_DIR, LEFT_PWM);
 
 void setup() {
     Serial.begin(9600);
-
-    rightMotor.begin();
-    leftMotor.begin();
 }
 
 void loop() {

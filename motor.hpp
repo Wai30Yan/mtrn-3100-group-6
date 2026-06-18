@@ -12,9 +12,6 @@ class Motor {
 
     void update_speed(float measuredVelocity);
 
-    // set PIN for the motor
-    void begin();
-
     // set values for DIR and PWN values
     // DIR for direction of the spin, PWM for speed of the spin
     // HIGH - LOW for DIR; 0-255 for PWM
@@ -26,8 +23,6 @@ class Motor {
   private:
     // TODO: add member variables
     uint8_t dirPin;
-    uint8_t pwnPin;
+    uint8_t pwmPin;
     float targetVelocity;  // rad/s
-    const float Kp = 1.5;
-    const float Ki = 0.1;
 };
