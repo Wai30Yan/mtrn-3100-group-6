@@ -16,7 +16,7 @@ void Motor::set_velocity(float v) {
     targetVelocity = v;
 }
 
-void Motor::drive(uint8_t dirValue, int pwmValue) {
+void Motor::spin(uint8_t dirValue, int pwmValue) {
     digitalWrite(dirPin, dirValue);
     analogWrite(pwmPin, pwmValue);
 }
