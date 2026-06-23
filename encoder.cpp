@@ -34,9 +34,9 @@ float Encoder::getRotation() {
   return ((float)currentCount / counts_per_revolution) * 2.0 * 3.14159;
 }
 
-float Encoder::position() const {
-  return const_cast<Encoder*>(this)->getRotation();
-}
+// float Encoder::position() const {
+//   return const_cast<Encoder*>(this)->getRotation();
+// }
 
 void Encoder::readEncoderISR() {
   if (instance != nullptr) instance->readEncoder();
