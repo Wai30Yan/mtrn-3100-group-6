@@ -1,13 +1,19 @@
 #pragma once
 
+#include <Arduino.h>
+
 class Encoder {
   public:
-    // TODO: add required args
-    Encoder();
+    Encoder() = default;
+    Encoder(bool channel, bool invert);
 
     // Get the current position of the encoder in radians
     float position() const;
+    void callback(uint8_t state);
 
   private:
-    // TODO: add member variables
-}
+    bool m_channel;
+    bool m_invert;
+
+    constexpr static float kScale{6.282f / 1400.0f};
+};
