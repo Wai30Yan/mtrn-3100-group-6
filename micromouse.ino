@@ -16,7 +16,7 @@
 
 #define LEFT_LIDER A0
 #define RIGHT_LIDER A1
-#define FRONT_LIDER A3
+#define FRONT_LIDER A2
 
 const float WHEEL_DIAMETER_MM = 32.0;
 const float WHEEL_RADIUS_MM = WHEEL_DIAMETER_MM / 2.0;
