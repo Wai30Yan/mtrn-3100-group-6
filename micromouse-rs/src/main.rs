@@ -1,25 +1,43 @@
 #![no_std]
 #![no_main]
+#![feature(str_as_str)]
+#![feature(never_type)]
+#![feature(unsafe_cell_access)]
 
-use core::panic::PanicInfo;
+#[macro_use]
+extern crate alloc;
 
-use cortex_m::asm::delay;
+use core::{cell::RefCell, panic::PanicInfo};
+
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use stm32g4::stm32g431::{Peripherals};
+use stm32g4::stm32g431::{CorePeripherals, Peripherals};
 use stm32g4xx_hal::{
-    gpio::GpioExt, pwr::{PwrExt, VoltageScale}, rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt}, time::RateExtU32, usb::{self, UsbBus}
+    delay::SYSTDelayExt, gpio::GpioExt, hal::delay::DelayNs, i2c::I2cExt, pwm::PwmExt, pwr::{PwrExt, VoltageScale}, rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt}, time::{ExtU32, RateExtU32}, timer::Timer, usb::{self, UsbBus},
 };
-use usb_device::device::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
-use usbd_serial::{SerialPort, USB_CLASS_CDC};
+
+use crate::serial::UsbSerial;
+
+pub mod serial;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    // hprintln!("{}", _info.message());
+fn panic(info: &PanicInfo) -> ! {
+    // SAFETY: if we are panicking we have bigger issues, we just want to try
+    // and scream out some diagnostics before dying.
+    static mut DOUBLE_PANIC: bool = false;
+
+    // Prevent us getting stuck in a loop if attempting to print panics
+    if unsafe { !DOUBLE_PANIC } {
+        print!("PANIC: {}\n", info.message());
+    }
+
+    unsafe {
+        DOUBLE_PANIC = true;
+    }
+
     loop {}
 }
 
-// Global allocator -- required by canadensis.
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
@@ -32,19 +50,37 @@ fn initialise_allocator() {
 
 #[entry]
 fn main() -> ! {
+    /*
+     * The first chunk of code is for low level initialisation of the hardware
+     * to provide facilities such as printing, delays and memory allocation. On
+     * an Arduino this would be done behind the scenes, but we want a bit more
+     * control so we are explicit about how this is done.
+     *
+     * PLEASE DO NOT TOUCH THIS CODE since it can result in the STM32 appearing
+     * unresponsive (ie. weird crashes before you have the ability to print data
+     * to help you debug things).
+     */
+
+    // Allow dynamic memory allocation
     initialise_allocator();
 
+    // Obtain access to MCU peripherals
     let dp = Peripherals::take().unwrap();
+    let cp = CorePeripherals::take().unwrap();
+
+    // Put the MCU in the highest power mode. We want to run the CPU as fast a
+    // possible and don't care about power consumption.
     let pwr = dp
         .PWR
         .constrain()
         .vos(VoltageScale::Range1 { enable_boost: true })
         .freeze();
 
+    // Configure the clocks (core 144MHz)
     let mut rcc = dp.RCC.freeze(
         Config::pll().pll_cfg(PllConfig {
             mux: PllSrc::HSE(8.MHz()),
-            m: PllMDiv::DIV_1,
+            m: PllMDiv::DIV_2,
             n: PllNMul::MUL_36,
             r: Some(PllRDiv::DIV_2),
             q: Some(PllQDiv::DIV_6),
@@ -52,19 +88,72 @@ fn main() -> ! {
         }),
         pwr,
     );
+    // Required for USB
+    rcc.enable_hsi48();
 
-    // Set up pins.
+    // Set up pins
     let gpioa = dp.GPIOA.split(&mut rcc);
     let gpiob = dp.GPIOB.split(&mut rcc);
     let gpioc = dp.GPIOC.split(&mut rcc);
-    let gpiod: stm32g4xx_hal::gpio::gpiod::Parts = dp.GPIOD.split(&mut rcc);
+    let gpiod = dp.GPIOD.split(&mut rcc);
+
+    // Allow code to sleep, should only be used in the main loop
+    let mut delay = cp.SYST.delay(&rcc.clocks);
+    unsafe {
+        UsbSerial::init(UsbBus::new(usb::Peripheral {
+            usb: dp.USB,
+            pin_dm: gpioa.pa11.into_alternate(),
+            pin_dp: gpioa.pa12.into_alternate(),
+        }))
+    };
+    // For USB tick (the spec requires at least 100Hz so do 200Hz to be safe)
+    Timer::new(dp.TIM7, &rcc.clocks).start_count_down(5.millis());
+    print!("Initialisation Complete!\n");
+    // Ensure that the USB buffers could be flushed
+    delay.delay_ms(10);
+
+    /*
+     * Scary low level code is done, this next section is equivlent to the
+     * Arduino `setup` function.
+     *
+     * A key difference with the Arduino way of doing things is that objects
+     * should be declared and initialised here. You will run into a host of
+     * errors if you try to put things in globals outside of the main function.
+     * This structure eliminates the design anti-pattern of having to call
+     * seperate begin functions after creating objects; in Rust if an object
+     * exists it should be in a valid and usable state.
+     */
+
+    /*
+     * **NEW PIN MAPPINGS**
+     *
+     * Builtin LED -- PC6
+     *
+     * I2C -- I2C2: PA8 (SDA) + PA9 (SCL)
+     *
+     * Encoder ? -- TIM3: PA6 + PA4
+     * Encoder ? -- TIM4: PB6 + PB7
+     *
+     * Motor ? -- PA2 (PWM: TIM15) + P?? (DIR)
+     * Motor ? -- PA7 (PWM: TIM17) + P?? (DIR)
+     *
+     * LIDAR L -- P?? (EN)
+     * LIDAR R -- P?? (EN)
+     * LIDAR F -- P?? (EN)
+     */
 
     let mut led = gpioc.pc6.into_push_pull_output();
 
+    /*
+     * Because we are not building on top of any framework, everything goes into
+     * the main function. There is no `loop` function like Arduino, but it is
+     * pretty simple for us to define our own main loop.
+     */
     loop {
+        print!("Hello world {}\n", 9);
         led.set_high();
-        delay(1024*1024*64);
+        delay.delay_ms(200);
         led.set_low();
-        delay(1024*1024*64);
+        delay.delay_ms(200);
     }
 }
