@@ -13,12 +13,27 @@ use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
 use stm32g4::stm32g431::{CorePeripherals, Peripherals};
 use stm32g4xx_hal::{
-    delay::SYSTDelayExt, gpio::GpioExt, hal::delay::DelayNs, i2c::I2cExt, pwm::PwmExt, pwr::{PwrExt, VoltageScale}, rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt}, time::{ExtU32, RateExtU32}, timer::Timer, usb::{self, UsbBus},
+    delay::SYSTDelayExt,
+    gpio::GpioExt,
+    hal::{delay::DelayNs, i2c::I2c},
+    i2c::I2cExt,
+    pwm::PwmExt,
+    pwr::{PwrExt, VoltageScale},
+    rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt},
+    time::{ExtU32, RateExtU32},
+    timer::Timer,
+    usb::{self, UsbBus},
 };
 
-use crate::serial::UsbSerial;
+use crate::{imu::Imu, motor::Motor, serial::UsbSerial};
 
+pub mod encoder;
+pub mod imu;
+pub mod lidar;
+pub mod motor;
 pub mod serial;
+
+pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -113,8 +128,8 @@ fn main() -> ! {
     delay.delay_ms(10);
 
     /*
-     * Scary low level code is done, this next section is equivlent to the
-     * Arduino `setup` function.
+     * Scary low level code is (mostly) done, this next section is equivlent to
+     * the Arduino `setup` function.
      *
      * A key difference with the Arduino way of doing things is that objects
      * should be declared and initialised here. You will run into a host of
@@ -122,6 +137,11 @@ fn main() -> ! {
      * This structure eliminates the design anti-pattern of having to call
      * seperate begin functions after creating objects; in Rust if an object
      * exists it should be in a valid and usable state.
+     *
+     * The STM32 Rust HAL makes extensive use of the rich type systems. A
+     * downside of this is that it can be difficult to work out the specific
+     * type you need without much experience. For my personal sanity I shall
+     * create the required generic types.
      */
 
     /*
@@ -142,7 +162,32 @@ fn main() -> ! {
      * LIDAR F -- P?? (EN)
      */
 
+    let mut raw_i2c = dp.I2C2.i2c(
+        (
+            gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
+            gpioa.pa9.into_alternate_open_drain().internal_pull_up(true),
+        ),
+        400.kHz(),
+        &mut rcc,
+    );
+    let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
+
+    let mut motor_a_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 1.kHz(), &mut rcc);
+    let mut motor_b_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 1.kHz(), &mut rcc);
+
+    /*
+     * Time to actually create our high level objects using the periherals
+     * defined above. GPIO pins are far simpler to deal with so the
+     * initialisation is performed in the main setup section.
+     */
+
     let mut led = gpioc.pc6.into_push_pull_output();
+
+    // TODO: fix pin assignments
+    let mut left_motor = Motor::new(&mut motor_a_pwm, gpioa.pa0.into_push_pull_output().erase());
+    let mut right_motor = Motor::new(&mut motor_b_pwm, gpioa.pa1.into_push_pull_output().erase());
+
+    let mut imu = Imu::new(&i2c_bus);
 
     /*
      * Because we are not building on top of any framework, everything goes into
