@@ -48,11 +48,11 @@ pub struct UsbSerial<'a> {
 static SERIAL: Mutex<UnsafeCell<MaybeUninit<UsbSerial<'static>>>> =
     Mutex::new(UnsafeCell::new(MaybeUninit::uninit()));
 
-impl<'a> UsbSerial<'static> {
+impl UsbSerial<'static> {
     fn new(usb_bus: &'static UsbBusAllocator<UsUsbBus>) -> Self {
-        let serial = SerialPort::new(&usb_bus);
+        let serial = SerialPort::new(usb_bus);
 
-        let usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+        let usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x16c0, 0x27dd))
             .strings(&[StringDescriptors::default()
                 .manufacturer("Fake company")
                 .product("Serial port")
@@ -69,7 +69,8 @@ impl<'a> UsbSerial<'static> {
         }
     }
 
-    /// SAFETY: very bad things will happen if this is called twice or it is not called before the read_line/write global methods
+    /// # Safety
+    /// very bad things will happen if this is called twice or it is not called before the read_line/write global methods
     pub unsafe fn init(usb_bus: UsbBusAllocator<UsUsbBus>) {
         cortex_m::interrupt::free(|cs| unsafe {
             SERIAL
@@ -85,25 +86,18 @@ impl<'a> UsbSerial<'static> {
         }
 
         let slices = self.write_buf.as_slices();
-        match self.serial.write(slices.0) {
-            Ok(n) if n == slices.0.len() => {
-                self.write_buf.drain(0..n);
+        if let Ok(n) = self.serial.write(slices.0) {
+            if n == slices.0.len()
+                && let Ok(k) = self.serial.write(slices.1)
+            {
+                self.write_buf.drain(0..n + k);
             }
-            Ok(n) => match self.serial.write(slices.1) {
-                Ok(k) => {
-                    self.write_buf.drain(0..n + k);
-                }
-                _ => {}
-            },
-            _ => {}
-        };
+            self.write_buf.drain(0..n);
+        }
 
         let mut buf = [0u8; 256];
-        match self.serial.read(&mut buf) {
-            Ok(n) if n > 0 => {
-                self.read_buf.extend(buf[0..n].into_iter());
-            }
-            _ => {}
+        if let Ok(n) = self.serial.read(&mut buf) {
+            self.read_buf.extend(buf[0..n].iter());
         }
     }
 
