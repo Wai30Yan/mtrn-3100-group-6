@@ -3,6 +3,7 @@
 #![feature(str_as_str)]
 #![feature(never_type)]
 #![feature(unsafe_cell_access)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate alloc;
@@ -128,9 +129,10 @@ fn main() -> ! {
         }))
     };
     let mut led = gpioc.pc6.into_push_pull_output();
-    // For USB tick (the spec requires at least 100Hz so do 200Hz to be safe)
+    // For USB tick, if the this is too slow then the buffers can get over
+    // filled so run things at 1kHz to avoid this.
     Timer::new(dp.TIM7, &rcc.clocks)
-        .start_count_down(5.millis())
+        .start_count_down(1.millis())
         .listen(Event::TimeOut);
     unsafe { NVIC::unmask(interrupt::TIM7) };
     // Give time to connect via USB
@@ -182,8 +184,9 @@ fn main() -> ! {
     );
     let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
 
-    let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 1.kHz(), &mut rcc);
-    let mut motor_r_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 1.kHz(), &mut rcc);
+    // Run at a higher frequency than the Arduino for smoother motion
+    let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 6.kHz(), &mut rcc);
+    let mut motor_r_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 6.kHz(), &mut rcc);
 
     /*
      * Time to actually create our high level objects using the periherals
@@ -192,8 +195,8 @@ fn main() -> ! {
      */
 
     // TODO: fix pin assignments
-    let mut left_motor = Motor::new(&mut motor_l_pwm, gpiob.pb11.into_push_pull_output().erase());
-    let mut right_motor = Motor::new(&mut motor_r_pwm, gpiob.pb10.into_push_pull_output().erase());
+    let mut left_motor = Motor::new(&mut motor_l_pwm, gpiob.pb11.into_push_pull_output().erase(), true);
+    let mut right_motor = Motor::new(&mut motor_r_pwm, gpiob.pb10.into_push_pull_output().erase(), false);
 
     let mut imu = Imu::new(&i2c_bus);
 
@@ -204,10 +207,11 @@ fn main() -> ! {
      */
     loop {
         imu.update();
-        serial::flush();
+        left_motor.set_speed(6.0);
+        right_motor.set_speed(3.0);
 
         print!(
-            "AX: {}m.s⁻² AY: {}m.s⁻² GZ: {}rad.s⁻¹\n",
+            "Ax: {} m.s⁻²\tAy: {} m.s⁻²\tGz: {} rad.s⁻¹\r\n",
             imu.ax(),
             imu.ay(),
             imu.gz()

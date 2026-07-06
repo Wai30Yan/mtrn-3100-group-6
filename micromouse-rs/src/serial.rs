@@ -11,8 +11,7 @@
  */
 
 use core::{
-    cell::UnsafeCell,
-    mem::{MaybeUninit, swap},
+    cell::UnsafeCell, intrinsics::breakpoint, mem::{MaybeUninit, swap},
 };
 
 use alloc::{
@@ -169,6 +168,6 @@ pub fn write(str: String) {
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        serial::write(format!($($arg)*))
+        crate::serial::write(format!($($arg)*))
     }
 }
