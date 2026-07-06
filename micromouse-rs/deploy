@@ -1,0 +1,5 @@
+#!/usr/bin/sh
+
+cargo build
+arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/debug/micromouse-rs firmware.bin
+sudo dfu-util -a 0 -d 0483:df11 -s 0x08000000 -D firmware.bin

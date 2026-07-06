@@ -22,6 +22,7 @@ use alloc::{
 
 use cortex_m::interrupt::Mutex;
 use nb::Error::WouldBlock;
+use stm32g4::{Periph, stm32g431::Peripherals};
 use stm32g4xx_hal::{
     gpio::{self, AF14},
     interrupt,
@@ -47,6 +48,8 @@ pub struct UsbSerial<'a> {
 
 static SERIAL: Mutex<UnsafeCell<MaybeUninit<UsbSerial<'static>>>> =
     Mutex::new(UnsafeCell::new(MaybeUninit::uninit()));
+
+const MAX_BUFFER: usize = 1024;
 
 impl UsbSerial<'static> {
     fn new(usb_bus: &'static UsbBusAllocator<UsUsbBus>) -> Self {
@@ -80,24 +83,29 @@ impl UsbSerial<'static> {
         });
     }
 
-    pub fn tick(&mut self) {
-        if !self.usb_dev.poll(&mut [&mut self.serial]) {
-            return;
-        }
+    pub fn flush(&mut self) {
+        const POLL_BUF_SIZE: usize = 256;
 
         let slices = self.write_buf.as_slices();
         if let Ok(n) = self.serial.write(slices.0) {
             if n == slices.0.len()
                 && let Ok(k) = self.serial.write(slices.1)
             {
-                self.write_buf.drain(0..n + k);
+                self.write_buf.drain(..n + k);
             }
-            self.write_buf.drain(0..n);
+            self.write_buf.drain(..n);
         }
 
-        let mut buf = [0u8; 256];
+        if !self.usb_dev.poll(&mut [&mut self.serial]) {
+            return;
+        }
+
+        let mut buf = [0u8; POLL_BUF_SIZE];
         if let Ok(n) = self.serial.read(&mut buf) {
-            self.read_buf.extend(buf[0..n].iter());
+            self.read_buf.extend(buf[..n].iter());
+        }
+        if self.read_buf.len() > MAX_BUFFER {
+            self.read_buf.drain(..self.read_buf.len() - MAX_BUFFER);
         }
     }
 
@@ -113,17 +121,28 @@ impl UsbSerial<'static> {
 
     pub fn write(&mut self, str: String) {
         self.write_buf.extend(str.bytes());
+        if self.write_buf.len() > MAX_BUFFER {
+            self.write_buf.drain(..self.write_buf.len() - MAX_BUFFER);
+        }
     }
 }
 
 #[interrupt]
 fn TIM7() {
+    flush();
+    unsafe { Peripherals::steal() }
+        .TIM7
+        .sr()
+        .write(|w| w.uif().clear());
+}
+
+pub fn flush() {
     cortex_m::interrupt::free(|cs| unsafe {
         SERIAL
             .borrow(cs)
             .as_mut_unchecked()
             .assume_init_mut()
-            .tick();
+            .flush();
     })
 }
 
