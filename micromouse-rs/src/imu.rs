@@ -9,21 +9,37 @@ pub struct Imu<'a> {
 }
 
 const ADDRESS: u8 = 0x68;
-const ACCELEROMETER_FACTOR: f32 = 9.81 / 8192.0;
-const GYROSCOPE_FACTOR: f32 = 1.0 / 1.143191;
+const ACCEL_FACTOR: f32 = 9.81 / 8192.0;
+const GYRO_FACTOR: f32 = 1.0 / 1.143191;
+
+const PWR_MGMT_1_REG: u8 = 0x6b;
+const SMPLRT_DIV_REG: u8 = 0x19;
+const CONFIG_REG: u8 = 0x26;
+const GYRO_CONFIG_REG: u8 = 0x27;
+const ACCEL_CONFIG_REG: u8 = 0x28;
 
 impl<'a> Imu<'a> {
     pub fn new(i2c_bus: &'a I2cBus<'a>) -> Self {
-        // PwrMgmt1
-        i2c_bus.borrow_mut().write(ADDRESS, &[0x6b, 0x01]).unwrap();
-        // SmplrtDiv
-        i2c_bus.borrow_mut().write(ADDRESS, &[0x19, 0x00]).unwrap();
-        // ConfigReg
-        i2c_bus.borrow_mut().write(ADDRESS, &[0x26, 0x00]).unwrap();
-        // GyroConfig
-        i2c_bus.borrow_mut().write(ADDRESS, &[0x27, 0x08]).unwrap();
-        // AccelConfigReg
-        i2c_bus.borrow_mut().write(ADDRESS, &[0x28, 0x08]).unwrap();
+        i2c_bus
+            .borrow_mut()
+            .write(ADDRESS, &[PWR_MGMT_1_REG, 0x01])
+            .unwrap();
+        i2c_bus
+            .borrow_mut()
+            .write(ADDRESS, &[SMPLRT_DIV_REG, 0x00])
+            .unwrap();
+        i2c_bus
+            .borrow_mut()
+            .write(ADDRESS, &[CONFIG_REG, 0x00])
+            .unwrap();
+        i2c_bus
+            .borrow_mut()
+            .write(ADDRESS, &[GYRO_CONFIG_REG, 0x08])
+            .unwrap();
+        i2c_bus
+            .borrow_mut()
+            .write(ADDRESS, &[ACCEL_CONFIG_REG, 0x08])
+            .unwrap();
 
         Self {
             i2c_bus,
@@ -41,9 +57,9 @@ impl<'a> Imu<'a> {
             .write_read(ADDRESS, &[0x3b], &mut buf)
             .unwrap();
 
-        self.ax = i16::from_le_bytes(*buf[0..1].as_array().unwrap()) as f32 * ACCELEROMETER_FACTOR;
-        self.ay = i16::from_le_bytes(*buf[2..3].as_array().unwrap()) as f32 * ACCELEROMETER_FACTOR;
-        self.gz = i16::from_le_bytes(*buf[6..7].as_array().unwrap()) as f32 * GYROSCOPE_FACTOR;
+        self.ax = i16::from_le_bytes(*buf[0..1].as_array().unwrap()) as f32 * ACCEL_FACTOR;
+        self.ay = i16::from_le_bytes(*buf[2..3].as_array().unwrap()) as f32 * ACCEL_FACTOR;
+        self.gz = i16::from_le_bytes(*buf[6..7].as_array().unwrap()) as f32 * GYRO_FACTOR;
     }
 
     /// Linear acceleration in the x direction in m/s^2

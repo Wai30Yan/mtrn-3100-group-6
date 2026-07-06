@@ -11,17 +11,18 @@ use core::{cell::RefCell, panic::PanicInfo};
 
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use stm32g4::stm32g431::{CorePeripherals, Peripherals};
+use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
     gpio::GpioExt,
     hal::{delay::DelayNs, i2c::I2c},
     i2c::I2cExt,
+    interrupt,
     pwm::PwmExt,
     pwr::{PwrExt, VoltageScale},
     rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt},
     time::{ExtU32, RateExtU32},
-    timer::Timer,
+    timer::{Event, Timer},
     usb::{self, UsbBus},
 };
 
@@ -37,13 +38,18 @@ pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    unsafe { Peripherals::steal() }
+        .GPIOC
+        .bsrr()
+        .write(|w| w.bs6().set_bit());
+
     // SAFETY: if we are panicking we have bigger issues, we just want to try
     // and scream out some diagnostics before dying.
     static mut DOUBLE_PANIC: bool = false;
 
     // Prevent us getting stuck in a loop if attempting to print panics
     if unsafe { !DOUBLE_PANIC } {
-        print!("PANIC: {}\n", info.message());
+        print!("PANIC: {}\r\nAT: {:?}", info.message(), info.location());
     }
 
     unsafe {
@@ -121,11 +127,15 @@ fn main() -> ! {
             pin_dp: gpioa.pa12.into_alternate(),
         }))
     };
+    let mut led = gpioc.pc6.into_push_pull_output();
     // For USB tick (the spec requires at least 100Hz so do 200Hz to be safe)
-    Timer::new(dp.TIM7, &rcc.clocks).start_count_down(5.millis());
-    print!("Initialisation Complete!\n");
-    // Ensure that the USB buffers could be flushed
-    delay.delay_ms(10);
+    Timer::new(dp.TIM7, &rcc.clocks)
+        .start_count_down(5.millis())
+        .listen(Event::TimeOut);
+    unsafe { NVIC::unmask(interrupt::TIM7) };
+    // Give time to connect via USB
+    delay.delay_ms(5000);
+    print!("Initialisation Complete!\r\n");
 
     /*
      * Scary low level code is (mostly) done, this next section is equivlent to
@@ -151,15 +161,15 @@ fn main() -> ! {
      *
      * I2C -- I2C2: PA8 (SDA) + PA9 (SCL)
      *
-     * Encoder ? -- TIM3: PA6 + PA4
-     * Encoder ? -- TIM4: PB6 + PB7
+     * Encoder L -- TIM4: PB6 + PB7
+     * Encoder R -- TIM3: PA6 + PA4
      *
-     * Motor ? -- PA2 (PWM: TIM15) + P?? (DIR)
-     * Motor ? -- PA7 (PWM: TIM17) + P?? (DIR)
+     * Motor L -- PA7 (PWM: TIM17) + PB11 (DIR)
+     * Motor R -- PA2 (PWM: TIM15) + PB10 (DIR)
      *
-     * LIDAR L -- P?? (EN)
-     * LIDAR R -- P?? (EN)
-     * LIDAR F -- P?? (EN)
+     * LIDAR L -- PB12 (EN)
+     * LIDAR R -- PB13 (EN)
+     * LIDAR F -- PB14 (EN)
      */
 
     let mut raw_i2c = dp.I2C2.i2c(
@@ -172,8 +182,8 @@ fn main() -> ! {
     );
     let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
 
-    let mut motor_a_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 1.kHz(), &mut rcc);
-    let mut motor_b_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 1.kHz(), &mut rcc);
+    let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 1.kHz(), &mut rcc);
+    let mut motor_r_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 1.kHz(), &mut rcc);
 
     /*
      * Time to actually create our high level objects using the periherals
@@ -181,11 +191,9 @@ fn main() -> ! {
      * initialisation is performed in the main setup section.
      */
 
-    let mut led = gpioc.pc6.into_push_pull_output();
-
     // TODO: fix pin assignments
-    let mut left_motor = Motor::new(&mut motor_a_pwm, gpioa.pa0.into_push_pull_output().erase());
-    let mut right_motor = Motor::new(&mut motor_b_pwm, gpioa.pa1.into_push_pull_output().erase());
+    let mut left_motor = Motor::new(&mut motor_l_pwm, gpiob.pb11.into_push_pull_output().erase());
+    let mut right_motor = Motor::new(&mut motor_r_pwm, gpiob.pb10.into_push_pull_output().erase());
 
     let mut imu = Imu::new(&i2c_bus);
 
@@ -195,10 +203,16 @@ fn main() -> ! {
      * pretty simple for us to define our own main loop.
      */
     loop {
-        print!("Hello world {}\n", 9);
-        led.set_high();
-        delay.delay_ms(200);
-        led.set_low();
-        delay.delay_ms(200);
+        imu.update();
+        serial::flush();
+
+        print!(
+            "AX: {}m.s⁻² AY: {}m.s⁻² GZ: {}rad.s⁻¹\n",
+            imu.ax(),
+            imu.ay(),
+            imu.gz()
+        );
+
+        delay.delay_ms(5);
     }
 }
