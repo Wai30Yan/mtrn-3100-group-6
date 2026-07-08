@@ -1,5 +1,3 @@
-use core::cmp::min;
-
 use stm32g4xx_hal::{
     gpio::{AnyPin, Output, PinState, PushPull},
     hal_02::PwmPin,
