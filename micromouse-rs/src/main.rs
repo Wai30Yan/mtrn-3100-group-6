@@ -9,8 +9,10 @@ extern crate alloc;
 
 use core::{cell::RefCell, panic::PanicInfo};
 
+use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
+use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
@@ -38,6 +40,8 @@ pub mod serial;
 pub mod state_observer;
 
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
+
+const TIMESTEP_MS: u32 = 10;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -176,6 +180,8 @@ fn main() -> ! {
      * LIDAR F -- PB14 (EN)
      */
 
+    let mut period_timer = Timer::new(dp.TIM8, &rcc.clocks).start_count_down(TIMESTEP_MS.millis());
+
     let mut raw_i2c = dp.I2C2.i2c(
         (
             gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
@@ -245,6 +251,13 @@ fn main() -> ! {
             right_encoder.position()
         );
 
-        delay.delay_ms(5);
+        /*
+         * This MCU is extreme overkill so it is fine to assume that we can
+         * finish all our work within 10ms, wait for the remaining time to pass
+         * so things run on a consistent schedule.
+         *
+         * As a result we do not need to run the control loop in an interupt.
+         */
+        block!(period_timer.wait()).unwrap();
     }
 }
