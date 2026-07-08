@@ -12,7 +12,6 @@
 
 use core::{
     cell::UnsafeCell,
-    intrinsics::breakpoint,
     mem::{MaybeUninit, swap},
 };
 
@@ -23,7 +22,7 @@ use alloc::{
 
 use cortex_m::interrupt::Mutex;
 use nb::Error::WouldBlock;
-use stm32g4::{Periph, stm32g431::Peripherals};
+use stm32g4::stm32g431::Peripherals;
 use stm32g4xx_hal::{
     gpio::{self, AF14},
     interrupt,
@@ -170,6 +169,6 @@ pub fn write(str: String) {
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        crate::serial::write(format!($($arg)*))
+        $crate::serial::write(format!($($arg)*))
     }
 }

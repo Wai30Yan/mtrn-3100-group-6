@@ -3,7 +3,6 @@
 #![feature(str_as_str)]
 #![feature(never_type)]
 #![feature(unsafe_cell_access)]
-#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate alloc;
@@ -12,16 +11,16 @@ use core::{cell::RefCell, panic::PanicInfo};
 
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals, TIM4};
+use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
-    gpio::{AF6, GpioExt},
+    gpio::GpioExt,
     hal::{delay::DelayNs, i2c::I2c},
     i2c::I2cExt,
     interrupt,
     pwm::PwmExt,
     pwr::{PwrExt, VoltageScale},
-    rcc::{Config, Enable, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt, Reset},
+    rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt},
     time::{ExtU32, RateExtU32},
     timer::{Event, Timer},
     usb::{self, UsbBus},
@@ -29,11 +28,14 @@ use stm32g4xx_hal::{
 
 use crate::{encoder::Encoder, imu::Imu, motor::Motor, serial::UsbSerial};
 
+extern crate nalgebra as na;
+
 pub mod encoder;
 pub mod imu;
 pub mod lidar;
 pub mod motor;
 pub mod serial;
+pub mod state_observer;
 
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
 
