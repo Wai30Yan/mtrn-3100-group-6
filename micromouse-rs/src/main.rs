@@ -14,10 +14,20 @@ use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals, TIM4};
 use stm32g4xx_hal::{
-    delay::SYSTDelayExt, gpio::{AF6, GpioExt}, hal::{delay::DelayNs, i2c::I2c}, i2c::I2cExt, interrupt, pwm::PwmExt, pwr::{PwrExt, VoltageScale}, rcc::{Config, Enable, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt, Reset}, time::{ExtU32, RateExtU32}, timer::{Event, Timer}, usb::{self, UsbBus},
+    delay::SYSTDelayExt,
+    gpio::{AF6, GpioExt},
+    hal::{delay::DelayNs, i2c::I2c},
+    i2c::I2cExt,
+    interrupt,
+    pwm::PwmExt,
+    pwr::{PwrExt, VoltageScale},
+    rcc::{Config, Enable, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt, Reset},
+    time::{ExtU32, RateExtU32},
+    timer::{Event, Timer},
+    usb::{self, UsbBus},
 };
 
-use crate::{imu::Imu, motor::Motor, serial::UsbSerial};
+use crate::{encoder::Encoder, imu::Imu, motor::Motor, serial::UsbSerial};
 
 pub mod encoder;
 pub mod imu;
@@ -195,25 +205,14 @@ fn main() -> ! {
         false,
     );
 
+    // Set encoder pins to the correct mode
     gpiob.pb6.into_alternate::<2>();
     gpiob.pb7.into_alternate::<2>();
-    TIM4::enable(&mut rcc);
-    TIM4::reset(&mut rcc);
-    dp.TIM4.ccmr1_input().write(|w| w.cc1s().ti1().cc2s().ti2());
-    dp.TIM4.ccer().write(|w| {
-        w.cc1p()
-            .clear_bit()
-            .cc1np()
-            .clear_bit()
-            .cc2p()
-            .clear_bit()
-            .cc2np()
-            .clear_bit()
-    });
-    dp.TIM4
-        .smcr()
-        .write(|w| unsafe { w.sms().bits(3).sms_3().clear_bit() });
-    dp.TIM4.cr1().write(|w| w.cen().set_bit());
+    gpioa.pa4.into_alternate::<2>();
+    gpioa.pa6.into_alternate::<2>();
+
+    let mut left_encoder = Encoder::new(dp.TIM4, false, &mut rcc);
+    let mut right_encoder = Encoder::new(dp.TIM3, true, &mut rcc);
 
     let mut imu = Imu::new(&i2c_bus);
 
@@ -223,7 +222,11 @@ fn main() -> ! {
      * pretty simple for us to define our own main loop.
      */
     loop {
+        left_encoder.update();
+        right_encoder.update();
+
         imu.update();
+
         left_motor.set_speed(6.0);
         right_motor.set_speed(3.0);
 
@@ -234,7 +237,11 @@ fn main() -> ! {
             imu.gz()
         );
 
-        print!("{}\r\n", dp.TIM4.cnt().read().cnt().bits());
+        print!(
+            "{}\t{}\r\n",
+            left_encoder.position(),
+            right_encoder.position()
+        );
 
         delay.delay_ms(5);
     }
