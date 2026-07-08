@@ -12,19 +12,9 @@ use core::{cell::RefCell, panic::PanicInfo};
 
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
+use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals, TIM4};
 use stm32g4xx_hal::{
-    delay::SYSTDelayExt,
-    gpio::GpioExt,
-    hal::{delay::DelayNs, i2c::I2c},
-    i2c::I2cExt,
-    interrupt,
-    pwm::PwmExt,
-    pwr::{PwrExt, VoltageScale},
-    rcc::{Config, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt},
-    time::{ExtU32, RateExtU32},
-    timer::{Event, Timer},
-    usb::{self, UsbBus},
+    delay::SYSTDelayExt, gpio::{AF6, GpioExt}, hal::{delay::DelayNs, i2c::I2c}, i2c::I2cExt, interrupt, pwm::PwmExt, pwr::{PwrExt, VoltageScale}, rcc::{Config, Enable, PllConfig, PllMDiv, PllNMul, PllQDiv, PllRDiv, PllSrc, RccExt, Reset}, time::{ExtU32, RateExtU32}, timer::{Event, Timer}, usb::{self, UsbBus},
 };
 
 use crate::{imu::Imu, motor::Motor, serial::UsbSerial};
@@ -194,9 +184,36 @@ fn main() -> ! {
      * initialisation is performed in the main setup section.
      */
 
-    // TODO: fix pin assignments
-    let mut left_motor = Motor::new(&mut motor_l_pwm, gpiob.pb11.into_push_pull_output().erase(), true);
-    let mut right_motor = Motor::new(&mut motor_r_pwm, gpiob.pb10.into_push_pull_output().erase(), false);
+    let mut left_motor = Motor::new(
+        &mut motor_l_pwm,
+        gpiob.pb11.into_push_pull_output().erase(),
+        true,
+    );
+    let mut right_motor = Motor::new(
+        &mut motor_r_pwm,
+        gpiob.pb10.into_push_pull_output().erase(),
+        false,
+    );
+
+    gpiob.pb6.into_alternate::<2>();
+    gpiob.pb7.into_alternate::<2>();
+    TIM4::enable(&mut rcc);
+    TIM4::reset(&mut rcc);
+    dp.TIM4.ccmr1_input().write(|w| w.cc1s().ti1().cc2s().ti2());
+    dp.TIM4.ccer().write(|w| {
+        w.cc1p()
+            .clear_bit()
+            .cc1np()
+            .clear_bit()
+            .cc2p()
+            .clear_bit()
+            .cc2np()
+            .clear_bit()
+    });
+    dp.TIM4
+        .smcr()
+        .write(|w| unsafe { w.sms().bits(3).sms_3().clear_bit() });
+    dp.TIM4.cr1().write(|w| w.cen().set_bit());
 
     let mut imu = Imu::new(&i2c_bus);
 
@@ -216,6 +233,8 @@ fn main() -> ! {
             imu.ay(),
             imu.gz()
         );
+
+        print!("{}\r\n", dp.TIM4.cnt().read().cnt().bits());
 
         delay.delay_ms(5);
     }

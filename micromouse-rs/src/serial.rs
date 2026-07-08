@@ -11,7 +11,9 @@
  */
 
 use core::{
-    cell::UnsafeCell, intrinsics::breakpoint, mem::{MaybeUninit, swap},
+    cell::UnsafeCell,
+    intrinsics::breakpoint,
+    mem::{MaybeUninit, swap},
 };
 
 use alloc::{
