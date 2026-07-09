@@ -27,7 +27,7 @@ use stm32g4xx_hal::{
     usb::{self, UsbBus},
 };
 
-use crate::{imu::Imu, motor::Motor, serial::UsbSerial};
+use crate::{imu::Imu, motor::Motor, serial::UsbSerial, lidar::Lidar};
 
 pub mod encoder;
 pub mod imu;
@@ -36,6 +36,10 @@ pub mod motor;
 pub mod serial;
 
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
+
+const LIDAR_ADDR_L: u8 = 0x29;
+const LIDAR_ADDR_R: u8 = 0x28;
+const LIDAR_ADDR_F: u8 = 0x27;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -199,6 +203,37 @@ fn main() -> ! {
     let mut right_motor = Motor::new(&mut motor_r_pwm, gpiob.pb10.into_push_pull_output().erase(), false);
 
     let mut imu = Imu::new(&i2c_bus);
+    
+    // connect the lidar power enable pins to ground to turn them on
+    let mut lidar_pin_l = gpiob.pb12.into_push_pull_output();
+    let mut lidar_pin_r = gpiob.pb13.into_push_pull_output();
+    let mut lidar_pin_f = gpiob.pb14.into_push_pull_output();
+
+    lidar_pin_l.set_low();
+    lidar_pin_r.set_low();
+    lidar_pin_f.set_low();
+
+    lidar_pin_l.set_high();
+    let mut lidar_l = Lidar::new(&i2c_bus, LIDAR_ADDR_L);
+    delay.delay_ms(2000);
+    print!("LIDAR L initialised\r\n");
+    print!("LIDAR L distance: {} mm\r\n", lidar_l.get_distance());
+    lidar_pin_l.set_low();
+
+    lidar_pin_r.set_high();
+    let mut lidar_r = Lidar::new(&i2c_bus, LIDAR_ADDR_R);
+    delay.delay_ms(2000);
+    print!("LIDAR R initialised\r\n");
+    print!("LIDAR R distance: {} mm\r\n", lidar_r.get_distance());
+    lidar_pin_r.set_low();
+
+    lidar_pin_f.set_high();
+    let mut lidar_f = Lidar::new(&i2c_bus, LIDAR_ADDR_F);
+    delay.delay_ms(2000);
+    print!("LIDAR F initialised\r\n");
+    print!("LIDAR F distance: {} mm\r\n", lidar_f.get_distance());
+    lidar_pin_f.set_low();
+
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -209,6 +244,10 @@ fn main() -> ! {
         imu.update();
         left_motor.set_speed(6.0);
         right_motor.set_speed(3.0);
+
+        lidar_l.update();
+        lidar_r.update();
+        lidar_f.update();
 
         print!(
             "Ax: {} m.s⁻²\tAy: {} m.s⁻²\tGz: {} rad.s⁻¹\r\n",
