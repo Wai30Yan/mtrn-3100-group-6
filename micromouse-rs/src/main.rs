@@ -68,9 +68,10 @@ pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
     two.copy_from_slice(b);
     whole
 }
-const LIDAR_ADDR_L: u8 = 0x29;
+
+const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
-const LIDAR_ADDR_F: u8 = 0x27;
+const LIDAR_ADDR_F: u8 = 0x29;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
