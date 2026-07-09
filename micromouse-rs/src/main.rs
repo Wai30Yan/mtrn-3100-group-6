@@ -37,9 +37,9 @@ pub mod serial;
 
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
 
-const LIDAR_ADDR_L: u8 = 0x29;
+const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
-const LIDAR_ADDR_F: u8 = 0x27;
+const LIDAR_ADDR_F: u8 = 0x29;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
