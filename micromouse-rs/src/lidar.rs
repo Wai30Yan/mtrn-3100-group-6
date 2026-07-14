@@ -1,4 +1,5 @@
 use cortex_m::asm::delay;
+use nb::Error::WouldBlock;
 use stm32g4xx_hal::gpio::{AnyPin, OpenDrain, Output};
 
 use crate::I2cBus;
@@ -75,6 +76,18 @@ const I2C_SLAVE_DEVICE_ADDRESS: u16 = 0x212;
 const INTERLEAVED_MODE_ENABLE: u16 = 0x2A3;
 
 const DEFAULT_LIDAR_ADDR: u8 = 0x29;
+
+pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
+    a: &[T; A],
+    b: &[T; B],
+) -> [T; A + B] {
+    let mut whole: [T; A + B] = [Default::default(); A + B];
+    let (one, two) = whole.split_at_mut(A);
+    one.copy_from_slice(a);
+    two.copy_from_slice(b);
+    whole
+}
+
 pub struct Lidar<'a> {
     i2c_bus: &'a I2cBus<'a>,
     address: u8,
@@ -91,181 +104,77 @@ impl<'a> Lidar<'a> {
         // Arbitary wait
         delay(24 * 1024 * 1024);
 
+        let mut lidar = Self {
+            i2c_bus,
+            address: DEFAULT_LIDAR_ADDR,
+            distance: 0.0,
+        };
+
         // magic code to initialize the lidar, taken from the datasheet
-        // writeReg(0x207, 0x01);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x02, 0x07, 0x01])
-            .unwrap();
-        // writeReg(0x208, 0x01);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x02, 0x08, 0x01])
-            .unwrap();
-        // writeReg(0x096, 0x00);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0x96, 0x00])
-            .unwrap();
-        // writeReg(0x097, 0xFD); // RANGE_SCALER = 253
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0x97, 0xFD])
-            .unwrap();
-        // writeReg(0x0E3, 0x01);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xE3, 0x01])
-            .unwrap();
-        // writeReg(0x0E4, 0x03);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xE4, 0x03])
-            .unwrap();
-        // writeReg(0x0E5, 0x02);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xE5, 0x02])
-            .unwrap();
-        // writeReg(0x0E6, 0x01);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xE6, 0x01])
-            .unwrap();
-        // writeReg(0x0E7, 0x03);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xE7, 0x03])
-            .unwrap();
-        // writeReg(0x0F5, 0x02);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xF5, 0x02])
-            .unwrap();
-        // writeReg(0x0D9, 0x05);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xD9, 0x05])
-            .unwrap();
-        // writeReg(0x0DB, 0xCE);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xDB, 0xCE])
-            .unwrap();
-        // writeReg(0x0DC, 0x03);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xDC, 0x03])
-            .unwrap();
-        // writeReg(0x0DD, 0xF8);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xDD, 0xF8])
-            .unwrap();
-        // writeReg(0x09F, 0x00);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0x9F, 0x00])
-            .unwrap();
-        // writeReg(0x0A3, 0x3C);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xA3, 0x3C])
-            .unwrap();
-        // writeReg(0x0B7, 0x00);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xB7, 0x00])
-            .unwrap();
-        // writeReg(0x0BB, 0x3C);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xBB, 0x3C])
-            .unwrap();
-        // writeReg(0x0B2, 0x09);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xB2, 0x09])
-            .unwrap();
-        // writeReg(0x0CA, 0x09);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xCA, 0x09])
-            .unwrap();
-        // writeReg(0x198, 0x01);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0x98, 0x01])
-            .unwrap();
-        // writeReg(0x1B0, 0x17);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0xB0, 0x17])
-            .unwrap();
-        // writeReg(0x1AD, 0x00);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0xAD, 0x00])
-            .unwrap();
-        // writeReg(0x0FF, 0x05);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0xFF, 0x05])
-            .unwrap();
-        // writeReg(0x100, 0x05);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0x00, 0x05])
-            .unwrap();
-        // writeReg(0x199, 0x05);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0x99, 0x05])
-            .unwrap();
-        // writeReg(0x1A6, 0x1B);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0xA6, 0x1B])
-            .unwrap();
-        // writeReg(0x1AC, 0x3E);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0xAC, 0x3E])
-            .unwrap();
-        // writeReg(0x1A7, 0x1F);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x01, 0xA7, 0x1F])
-            .unwrap();
-        // writeReg(0x030, 0x00);
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x00, 0x30, 0x00])
-            .unwrap();
+        lidar.write_reg(0x0208, 0x01);
+        lidar.write_reg(0x0207, 0x01);
+        lidar.write_reg(0x0096, 0x00);
+        lidar.write_reg(0x0097, 0xFD); // RANGE_SCALER = 253
+        lidar.write_reg(0x00E3, 0x01);
+        lidar.write_reg(0x00E4, 0x03);
+        lidar.write_reg(0x00E5, 0x02);
+        lidar.write_reg(0x00E6, 0x01);
+        lidar.write_reg(0x00E7, 0x03);
+        lidar.write_reg(0x00F5, 0x02);
+        lidar.write_reg(0x00D9, 0x05);
+        lidar.write_reg(0x00DB, 0xCE);
+        lidar.write_reg(0x00DC, 0x03);
+        lidar.write_reg(0x00DD, 0xF8);
+        lidar.write_reg(0x009F, 0x00);
+        lidar.write_reg(0x00A3, 0x3C);
+        lidar.write_reg(0x00B7, 0x00);
+        lidar.write_reg(0x00BB, 0x3C);
+        lidar.write_reg(0x00B2, 0x09);
+        lidar.write_reg(0x00CA, 0x09);
+        lidar.write_reg(0x0198, 0x01);
+        lidar.write_reg(0x01B0, 0x17);
+        lidar.write_reg(0x01AD, 0x00);
+        lidar.write_reg(0x00FF, 0x05);
+        lidar.write_reg(0x0100, 0x05);
+        lidar.write_reg(0x0199, 0x05);
+        lidar.write_reg(0x01A6, 0x1B);
+        lidar.write_reg(0x01AC, 0x3E);
+        lidar.write_reg(0x01A7, 0x1F);
+        lidar.write_reg(0x0030, 0x00);
 
         // update slave address
-        i2c_bus
-            .borrow_mut()
-            .write(DEFAULT_LIDAR_ADDR, &[0x2, 0x12, address])
-            .unwrap();
+        lidar.write_reg(I2C_SLAVE_DEVICE_ADDRESS, address);
+        lidar.address = address;
 
-        Self {
-            i2c_bus,
-            address,
-            distance: 0.0,
-        }
+        lidar
     }
 
-    pub fn update(&mut self) {
-        let mut buf = [0u8; 2];
+    fn write_reg(&mut self, reg: u16, val: u8) {
         self.i2c_bus
             .borrow_mut()
-            .write_read(self.address, &[0x1E], &mut buf)
+            .write(self.address, &concat(&reg.to_be_bytes(), &[val]))
             .unwrap();
-        self.distance = u16::from_be_bytes(buf) as f32;
     }
 
-    pub fn get_distance(&self) -> f32 {
+    fn read_reg(&mut self, reg: u16) -> u8 {
+        let mut buf = [0u8; 1];
+        self.i2c_bus
+            .borrow_mut()
+            .write_read(self.address, &reg.to_be_bytes(), &mut buf)
+            .unwrap();
+
+        buf[0]
+    }
+
+    pub fn update(&mut self) -> nb::Result<(), !> {
+        // TODO: convert from raw value to m
+        self.distance = self.read_reg(RESULT_RANGE_VAL) as f32;
+
+        // TODO: return nb::Result::Err(WouldBlock) if the value is not ready
+        nb::Result::Ok(())
+    }
+
+    pub fn distance(&self) -> f32 {
         self.distance
     }
 }

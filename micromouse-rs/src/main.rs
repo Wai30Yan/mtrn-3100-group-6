@@ -4,6 +4,7 @@
 #![feature(never_type)]
 #![feature(unsafe_cell_access)]
 #![feature(core_intrinsics)]
+#![feature(generic_const_exprs)]
 
 #[macro_use]
 extern crate alloc;
@@ -228,10 +229,6 @@ fn main() -> ! {
     let mut lidar_r = Lidar::new(&i2c_bus, lidar_r_en, LIDAR_ADDR_R);
     let mut lidar_f = Lidar::new(&i2c_bus, lidar_f_en, LIDAR_ADDR_F);
 
-    print!("LIDAR L distance: {} mm\r\n", lidar_l.get_distance());
-    print!("LIDAR R distance: {} mm\r\n", lidar_r.get_distance());
-    print!("LIDAR F distance: {} mm\r\n", lidar_f.get_distance());
-
     /*
      * Because we are not building on top of any framework, everything goes into
      * the main function. There is no `loop` function like Arduino, but it is
@@ -255,9 +252,9 @@ fn main() -> ! {
 
         print!(
             "Ll: {} mm\tLr: {} mm\tLf: {} mm\r\n",
-            lidar_l.get_distance(),
-            lidar_r.get_distance(),
-            lidar_f.get_distance()
+            lidar_l.distance(),
+            lidar_r.distance(),
+            lidar_f.distance()
         );
 
         delay.delay_ms(5);
