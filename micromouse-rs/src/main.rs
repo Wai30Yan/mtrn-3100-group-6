@@ -20,7 +20,7 @@ use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
-    gpio::GpioExt,
+    gpio::{GpioExt, PinState},
     hal::{delay::DelayNs, i2c::I2c},
     i2c::I2cExt,
     interrupt,
@@ -271,15 +271,22 @@ fn main() -> ! {
     let mut encoder_right = EncoderInstance::new(dp.TIM3, true, &mut rcc);
 
     let mut imu = Imu::new(&i2c_bus);
-    
-    // connect the lidar power enable pins to ground to turn them on
-    let mut lidar_pin_l = gpiob.pb12.into_push_pull_output();
-    let mut lidar_pin_r = gpiob.pb13.into_push_pull_output();
-    let mut lidar_pin_f = gpiob.pb14.into_push_pull_output();
 
-    lidar_pin_l.set_low();
-    lidar_pin_r.set_low();
-    lidar_pin_f.set_low();
+    let lidar_l_en = gpiob
+        .pb12
+        .into_open_drain_output_in_state(PinState::Low)
+        .erase();
+    let lidar_r_en = gpiob
+        .pb13
+        .into_open_drain_output_in_state(PinState::Low)
+        .erase();
+    let lidar_f_en = gpiob
+        .pb14
+        .into_open_drain_output_in_state(PinState::Low)
+        .erase();
+    let mut lidar_l = Lidar::new(&i2c_bus, lidar_l_en, LIDAR_ADDR_L);
+    let mut lidar_r = Lidar::new(&i2c_bus, lidar_r_en, LIDAR_ADDR_R);
+    let mut lidar_f = Lidar::new(&i2c_bus, lidar_f_en, LIDAR_ADDR_F);
 
     lidar_pin_l.set_high();
     let mut lidar_l = Lidar::new(&i2c_bus, LIDAR_ADDR_L);
@@ -300,8 +307,6 @@ fn main() -> ! {
     delay.delay_ms(100);
     print!("LIDAR F initialised\r\n");
     print!("LIDAR F distance: {} mm\r\n", lidar_f.get_distance());
-    lidar_pin_f.set_low();
-
 
     let mut observer = StateObserver::new();
 
