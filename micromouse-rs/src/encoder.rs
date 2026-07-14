@@ -3,8 +3,13 @@ use core::f32;
 use stm32g4::{Periph, stm32g431::tim3};
 use stm32g4xx_hal::rcc::{Enable, Rcc, Reset};
 
+pub trait Encoder {
+    // Get the current position of the encoder in radians
+    fn position(&self) -> f32;
+}
+
 type Timer<const A: usize> = Periph<tim3::RegisterBlock, A>;
-pub struct Encoder<const A: usize>
+pub struct EncoderInstance<const A: usize>
 where
     Timer<A>: Enable + Reset,
 {
@@ -17,7 +22,7 @@ where
 // 2800 CPR encoder (double since we are using both edges)
 const ENCODER_FACTOR: f32 = 2.0 * f32::consts::PI / 2800.0;
 
-impl<const A: usize> Encoder<A>
+impl<const A: usize> EncoderInstance<A>
 where
     Timer<A>: Enable + Reset,
 {
@@ -64,9 +69,13 @@ where
         }
         self.count_lower = raw_count;
     }
+}
 
-    // Get the current position of the encoder in radians
-    pub fn position(&self) -> f32 {
+impl<const A: usize> Encoder for EncoderInstance<A>
+where
+    Timer<A>: Enable + Reset,
+{
+    fn position(&self) -> f32 {
         ((self.count_upper as i32) * (u16::MAX as i32) + (self.count_lower as i32)) as f32
             * ENCODER_FACTOR
             * if self.invert { -1.0 } else { 1.0 }
