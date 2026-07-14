@@ -5,7 +5,10 @@
 #![feature(unsafe_cell_access)]
 #![feature(core_intrinsics)]
 #![feature(generic_const_exprs)]
+<<<<<<< HEAD
 #![feature(clamp_magnitude)]
+=======
+>>>>>>> a5dec54 (Refactor the lidar to use read and write functions)
 
 #[macro_use]
 extern crate alloc;
@@ -401,6 +404,12 @@ fn main() -> ! {
 
         let desired = motion_manager.update(observer.pose());
         let (wl, wr) = desired.to_wheel_velocities();
+        print!(
+            "Ll: {} mm\tLr: {} mm\tLf: {} mm\r\n",
+            lidar_l.distance(),
+            lidar_r.distance(),
+            lidar_f.distance()
+        );
 
         // print!("{:?}\r\n", observer.pose());
         // delay.delay_ms(1);
