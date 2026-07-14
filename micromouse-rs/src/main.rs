@@ -3,6 +3,7 @@
 #![feature(str_as_str)]
 #![feature(never_type)]
 #![feature(unsafe_cell_access)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate alloc;
@@ -28,7 +29,12 @@ use stm32g4xx_hal::{
     usb::{self, UsbBus},
 };
 
-use crate::{encoder::Encoder, imu::Imu, motor::Motor, serial::UsbSerial};
+use crate::{
+    encoder::{Encoder, EncoderInstance},
+    imu::Imu,
+    motor::Motor,
+    serial::UsbSerial,
+};
 
 extern crate nalgebra as na;
 
@@ -116,6 +122,7 @@ fn main() -> ! {
         }),
         pwr,
     );
+
     // Required for USB
     rcc.enable_hsi48();
 
@@ -202,25 +209,25 @@ fn main() -> ! {
      * initialisation is performed in the main setup section.
      */
 
-    let mut left_motor = Motor::new(
+    let mut motor_left = Motor::new(
         &mut motor_l_pwm,
         gpiob.pb11.into_push_pull_output().erase(),
         true,
     );
-    let mut right_motor = Motor::new(
+    let mut motor_right = Motor::new(
         &mut motor_r_pwm,
         gpiob.pb10.into_push_pull_output().erase(),
         false,
     );
 
     // Set encoder pins to the correct mode
-    gpiob.pb6.into_alternate::<2>();
-    gpiob.pb7.into_alternate::<2>();
-    gpioa.pa4.into_alternate::<2>();
-    gpioa.pa6.into_alternate::<2>();
+    gpiob.pb6.into_alternate::<2>().internal_pull_up(true);
+    gpiob.pb7.into_alternate::<2>().internal_pull_up(true);
+    gpioa.pa4.into_alternate::<2>().internal_pull_up(true);
+    gpioa.pa6.into_alternate::<2>().internal_pull_up(true);
 
-    let mut left_encoder = Encoder::new(dp.TIM4, false, &mut rcc);
-    let mut right_encoder = Encoder::new(dp.TIM3, true, &mut rcc);
+    let mut encoder_left = EncoderInstance::new(dp.TIM4, false, &mut rcc);
+    let mut encoder_right = EncoderInstance::new(dp.TIM3, true, &mut rcc);
 
     let mut imu = Imu::new(&i2c_bus);
 
@@ -230,13 +237,13 @@ fn main() -> ! {
      * pretty simple for us to define our own main loop.
      */
     loop {
-        left_encoder.update();
-        right_encoder.update();
+        encoder_left.update();
+        encoder_right.update();
 
         imu.update();
 
-        left_motor.set_speed(6.0);
-        right_motor.set_speed(3.0);
+        motor_left.set_speed(6.0);
+        motor_right.set_speed(3.0);
 
         print!(
             "Ax: {} m.s⁻²\tAy: {} m.s⁻²\tGz: {} rad.s⁻¹\r\n",
@@ -247,8 +254,8 @@ fn main() -> ! {
 
         print!(
             "{}\t{}\r\n",
-            left_encoder.position(),
-            right_encoder.position()
+            encoder_left.position(),
+            encoder_right.position()
         );
 
         /*
