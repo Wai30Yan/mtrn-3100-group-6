@@ -75,6 +75,8 @@ const FIRMWARE_RESULT_SCALER: u16 = 0x120;
 const I2C_SLAVE_DEVICE_ADDRESS: u16 = 0x212;
 const INTERLEAVED_MODE_ENABLE: u16 = 0x2A3;
 
+const SCALER_VALUES: [u16; 4] = [0, 253, 127, 84];
+
 const DEFAULT_LIDAR_ADDR: u8 = 0x29;
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
@@ -92,6 +94,7 @@ pub struct Lidar<'a> {
     i2c_bus: &'a I2cBus<'a>,
     address: u8,
     distance: f32,
+    ptp_offset: u8,
 }
 
 impl<'a> Lidar<'a> {
@@ -108,6 +111,7 @@ impl<'a> Lidar<'a> {
             i2c_bus,
             address: DEFAULT_LIDAR_ADDR,
             distance: 0.0,
+            ptp_offset: 0,
         };
 
         // magic code to initialize the lidar, taken from the datasheet
@@ -146,6 +150,9 @@ impl<'a> Lidar<'a> {
         lidar.write_reg(I2C_SLAVE_DEVICE_ADDRESS, address);
         lidar.address = address;
 
+        // update ptp_offset
+        lidar.ptp_offset = lidar.read_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET) as u8;
+
         lidar
     }
 
@@ -166,9 +173,44 @@ impl<'a> Lidar<'a> {
         buf[0]
     }
 
+    fn write_reg16(&mut self, reg: u16, val: u16) {
+        self.i2c_bus
+            .borrow_mut()
+            .write(self.address, &concat(&reg.to_be_bytes(), &val.to_be_bytes()))
+            .unwrap();
+    }
+
+    // fn read_reg16(&mut self, reg: u16) -> u16 {
+    //     let mut buf = [0u8; 2];
+    //     self.i2c_bus
+    //         .borrow_mut()
+    //         .write_read(self.address, &reg.to_be_bytes(), &mut buf)
+    //         .unwrap();
+
+    //     u16::from_be_bytes(buf)
+    // }
+
+    // fn write_reg32(&mut self, reg: u16, val: u32) {
+    //     self.i2c_bus
+    //         .borrow_mut()
+    //         .write(self.address, &concat(&reg.to_be_bytes(), &val.to_be_bytes()))
+    //         .unwrap();
+    // }
+
+    // fn read_reg32(&mut self, reg: u16) -> u32 {
+    //     let mut buf = [0u8; 4];
+    //     self.i2c_bus
+    //         .borrow_mut()
+    //         .write_read(self.address, &reg.to_be_bytes(), &mut buf)
+    //         .unwrap();
+
+    //     u32::from_be_bytes(buf)
+    // }
+
     pub fn update(&mut self) -> nb::Result<(), !> {
         // TODO: convert from raw value to m
         self.distance = self.read_reg(RESULT_RANGE_VAL) as f32;
+        self.write_reg(SYSTEM_INTERRUPT_CLEAR, 0x01);
 
         // TODO: return nb::Result::Err(WouldBlock) if the value is not ready
         nb::Result::Ok(())
@@ -176,5 +218,42 @@ impl<'a> Lidar<'a> {
 
     pub fn distance(&self) -> f32 {
         self.distance
+    }
+
+    pub fn read_range_continuous(&mut self) -> u8 {
+        self.write_reg(SYSRANGE_START, 0x03);
+        self.read_reg(RESULT_RANGE_VAL)
+    }
+
+    pub fn configure_default(&mut self) {
+        // Recommended public register settings from the datasheet
+        self.write_reg(READOUT_AVERAGING_SAMPLE_PERIOD, 0x30);
+        self.write_reg(SYSALS_ANALOGUE_GAIN, 0x46);
+        self.write_reg(SYSRANGE_VHV_REPEAT_RATE, 0xFF);
+        self.write_reg16(SYSALS_INTEGRATION_PERIOD, 0x0063);
+        self.write_reg(SYSRANGE_VHV_RECALIBRATE, 0x01);
+
+        // Optional: Public register settings from the datasheet
+        self.write_reg(SYSRANGE_INTERMEASUREMENT_PERIOD, 0x09);
+        self.write_reg(SYSALS_INTERMEASUREMENT_PERIOD, 0x31);
+        self.write_reg(SYSTEM_INTERRUPT_CONFIG_GPIO, 0x24);
+        self.write_reg(SYSRANGE_MAX_CONVERGENCE_TIME, 0x31);
+        self.write_reg(INTERLEAVED_MODE_ENABLE, 0);
+
+        self.set_scaling(1);
+    }
+
+    pub fn set_scaling(&mut self, scaling: u8) {
+        if scaling < 1 || scaling > 3 {
+            panic!("Scaling must be between 1 and 3");
+        }
+        self.write_reg16(RANGE_SCALER, SCALER_VALUES[scaling as usize].try_into().unwrap());
+        let new_ptp_offset = self.ptp_offset / scaling as u8;
+        self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, new_ptp_offset);
+        self.write_reg(SYSRANGE_CROSSTALK_VALID_HEIGHT, 20 / scaling);
+
+        let rce = self.read_reg(SYSRANGE_RANGE_CHECK_ENABLES);
+        self.write_reg(SYSRANGE_RANGE_CHECK_ENABLES, (rce & 0xFE) | scaling); // enable range ignore threshold check
+
     }
 }
