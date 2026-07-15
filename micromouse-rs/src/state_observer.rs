@@ -1,8 +1,9 @@
 use core::intrinsics::{cosf32, sinf32};
 
+use cortex_m::asm::delay;
 use na::{Isometry2, SMatrix, SVector, Vector2};
 
-use crate::{encoder::Encoder, imu::Imu};
+use crate::{encoder::Encoder, imu::Imu, print};
 
 const DT: f32 = 0.01;
 const R: f32 = 0.032;
@@ -103,8 +104,11 @@ impl StateObserver {
             let mut upper = q.fixed_view_mut::<9, 9>(0, 0);
             upper += self.covar;
 
+            // TODO: set correct covars
             q.fixed_view_mut::<6, 6>(9, 9)
-                .set_diagonal(&SVector::from_column_slice(&[0.0; 6]));
+                .set_diagonal(&SVector::from_column_slice(&[
+                    0.001, 0.001, 0.01, 0.001, 0.001, 0.001,
+                ]));
             q.try_inverse().unwrap()
         };
 
@@ -129,20 +133,21 @@ impl StateObserver {
             (DT * (2.
                 * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
                 * (beta[3] - (beta[9] * DT) / 2.)
-                - B * beta[5]
                 + 2. * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.)))
+                    * (beta[4] - (beta[10] * DT) / 2.)
+                - B * (beta[5] - (beta[11] * DT) / 2.)))
                 / R,
-            (DT * (B * beta[5]
-                + 2. * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[3] - (beta[9] * DT) / 2.)
+            (DT * (2.
+                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                * (beta[3] - (beta[9] * DT) / 2.)
                 + 2. * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.)))
+                    * (beta[4] - (beta[10] * DT) / 2.)
+                + B * (beta[5] - (beta[11] * DT) / 2.)))
                 / R,
             cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[3] - (beta[9] * DT) / 2.)
-                + sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.),
+                * (beta[4] - (beta[10] * DT) / 2.)
+                - sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * (beta[3] - (beta[9] * DT) / 2.),
             beta[6]
                 + beta[11] * IY
                 + IX * beta[5] * beta[5]
@@ -151,8 +156,8 @@ impl StateObserver {
             beta[7]
                 + beta[11] * IX
                 + IY * beta[5] * beta[5]
-                + beta[9] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                + beta[10] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
+                + beta[10] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                - beta[9] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
             beta[8] + beta[5],
         ])
     }
@@ -288,11 +293,12 @@ impl StateObserver {
             0.,
             -(DT * DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
             -(DT * DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            (DT * ((DT
-                * DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[4] - (beta[10] * DT) / 2.))
-                / 2.
+            (DT * ((B * DT) / 2.
+                + (DT
+                    * DT
+                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * (beta[4] - (beta[10] * DT) / 2.))
+                    / 2.
                 - (DT
                     * DT
                     * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
@@ -320,12 +326,13 @@ impl StateObserver {
             0.,
             -(DT * DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
             -(DT * DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            (DT * ((DT
-                * DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[4] - (beta[10] * DT) / 2.))
-                / 2.
+            -(DT * ((B * DT) / 2.
                 - (DT
+                    * DT
+                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * (beta[4] - (beta[10] * DT) / 2.))
+                    / 2.
+                + (DT
                     * DT
                     * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.))
@@ -333,32 +340,32 @@ impl StateObserver {
                 / R,
             0.,
             0.,
-            cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[4] - (beta[10] * DT) / 2.)
+            -cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                * (beta[3] - (beta[9] * DT) / 2.)
                 - sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[3] - (beta[9] * DT) / 2.),
+                    * (beta[4] - (beta[10] * DT) / 2.),
+            -sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
             cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            (DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+            (DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
                 * (beta[3] - (beta[9] * DT) / 2.))
                 / 2.
-                - (DT
-                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                + (DT
+                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
                     * (beta[4] - (beta[10] * DT) / 2.))
                     / 2.,
             0.,
             0.,
             0.,
+            (DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / 2.,
             -(DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / 2.,
-            -(DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / 2.,
-            (DT * DT
+            -(DT * DT
                 * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[4] - (beta[10] * DT) / 2.))
+                * (beta[3] - (beta[9] * DT) / 2.))
                 / 4.
                 - (DT
                     * DT
                     * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[3] - (beta[9] * DT) / 2.))
+                    * (beta[4] - (beta[10] * DT) / 2.))
                     / 4.,
             0.,
             0.,
@@ -392,30 +399,30 @@ impl StateObserver {
                     / 4.,
             0.,
             0.,
-            beta[10] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                - beta[9] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
+            -beta[9] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                - beta[10] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
             0.,
             0.,
             2. * IY * beta[5]
-                - (beta[10]
+                + (beta[9]
                     * DT
                     * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
                     / 2.
-                + (beta[9]
+                + (beta[10]
                     * DT
                     * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
                     / 2.,
             0.,
             1.,
             0.,
+            -sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
             cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            IX + (beta[10]
+            IX - (beta[9]
                 * DT
                 * DT
                 * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
                 / 4.
-                - (beta[9]
+                - (beta[10]
                     * DT
                     * DT
                     * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
@@ -429,6 +436,7 @@ impl StateObserver {
             0.,
             0.,
             1.,
+            0.,
             0.,
             0.,
         ])
