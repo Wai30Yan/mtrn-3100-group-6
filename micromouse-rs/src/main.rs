@@ -4,6 +4,7 @@
 #![feature(never_type)]
 #![feature(unsafe_cell_access)]
 #![feature(core_intrinsics)]
+#![feature(generic_const_exprs)]
 
 #[macro_use]
 extern crate alloc;
@@ -30,10 +31,7 @@ use stm32g4xx_hal::{
 };
 
 use crate::{
-    encoder::{Encoder, EncoderInstance},
-    imu::Imu,
-    motor::Motor,
-    serial::UsbSerial,
+    encoder::{Encoder, EncoderInstance}, imu::Imu, motor::Motor, serial::UsbSerial, state_observer::StateObserver,
 };
 
 extern crate nalgebra as na;
@@ -231,6 +229,8 @@ fn main() -> ! {
 
     let mut imu = Imu::new(&i2c_bus);
 
+    let mut observer = StateObserver::new();
+
     /*
      * Because we are not building on top of any framework, everything goes into
      * the main function. There is no `loop` function like Arduino, but it is
@@ -242,10 +242,10 @@ fn main() -> ! {
 
         imu.update();
 
-        motor_left.set_speed(6.0);
-        motor_right.set_speed(3.0);
+        observer.update(&imu, &encoder_left, &encoder_right);
 
-        print!(
+       /*
+       print!(
             "Ax: {} m.s⁻²\tAy: {} m.s⁻²\tGz: {} rad.s⁻¹\r\n",
             imu.ax(),
             imu.ay(),
@@ -257,6 +257,9 @@ fn main() -> ! {
             encoder_left.position(),
             encoder_right.position()
         );
+         */
+
+        print!("{:?}\r\n", observer.pose());
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
