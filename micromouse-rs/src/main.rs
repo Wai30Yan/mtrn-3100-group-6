@@ -31,7 +31,11 @@ use stm32g4xx_hal::{
 };
 
 use crate::{
-    encoder::{Encoder, EncoderInstance}, imu::Imu, motor::Motor, serial::UsbSerial, state_observer::StateObserver,
+    encoder::{Encoder, EncoderInstance},
+    imu::Imu,
+    motor::Motor,
+    serial::UsbSerial,
+    state_observer::StateObserver,
 };
 
 extern crate nalgebra as na;
@@ -150,6 +154,23 @@ fn main() -> ! {
     delay.delay_ms(5000);
     print!("Initialisation Complete!\r\n");
 
+    // Reset and enable the timer peripheral.
+    rcc.apb1rstr1().modify(|_, w| w.tim2rst().bit(true));
+    rcc.apb1rstr1().modify(|_, w| w.tim2rst().bit(false));
+    rcc.apb1enr1().modify(|_, w| w.tim2en().bit(true));
+
+    // updates on overflow happen automatically
+    unsafe {
+        // scale 144MHz to 1MHz
+        dp.TIM2.psc().write(|w| w.psc().bits(144 - 1));
+        // NOTE: do not disable updates, as the prescaler is loaded ON AN UPDATE EVENT
+        // so the prescaler won't actually apply until e.g. counter overflows
+        // (which we effectively set to happen immediately below)
+        dp.TIM2.cnt().write(|w| w.cnt().bits(0xFFFFFFFF));
+        // enable timer
+        dp.TIM2.cr1().write(|w| w.cen().bit(true));
+    }
+
     /*
      * Scary low level code is (mostly) done, this next section is equivlent to
      * the Arduino `setup` function.
@@ -244,23 +265,11 @@ fn main() -> ! {
 
         observer.update(&imu, &encoder_left, &encoder_right);
 
-       /*
-       print!(
-            "Ax: {} m.s⁻²\tAy: {} m.s⁻²\tGz: {} rad.s⁻¹\r\n",
-            imu.ax(),
-            imu.ay(),
-            imu.gz()
-        );
+        motor_left.set_speed(3.0);
+        motor_right.set_speed(3.0);
 
-        print!(
-            "{}\t{}\r\n",
-            encoder_left.position(),
-            encoder_right.position()
-        );
-         */
 
         print!("{:?}\r\n", observer.pose());
-
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
          * finish all our work within 10ms, wait for the remaining time to pass

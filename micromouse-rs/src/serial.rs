@@ -49,7 +49,7 @@ pub struct UsbSerial<'a> {
 static SERIAL: Mutex<UnsafeCell<MaybeUninit<UsbSerial<'static>>>> =
     Mutex::new(UnsafeCell::new(MaybeUninit::uninit()));
 
-const MAX_BUFFER: usize = 1024;
+const MAX_BUFFER: usize = 4096;
 
 impl UsbSerial<'static> {
     fn new(usb_bus: &'static UsbBusAllocator<UsUsbBus>) -> Self {
