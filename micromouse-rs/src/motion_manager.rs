@@ -4,7 +4,10 @@ use na::{Isometry, Isometry2};
 #[derive(Clone, Copy, Debug)]
 pub enum Motion {
     Idle,
-    Pivot { pose: Isometry2<f32> },
+    Pivot {
+        pose: Isometry2<f32>,
+        ignore_translation: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -27,11 +30,8 @@ pub struct MotionManager {
     current_pose: Isometry2<f32>,
 }
 
-const PIVOT_LINEAR_GAIN: f32 = 3.0;
-const PIVOT_ANGULAR_GAIN: f32 = 10.0;
-
-const LINEAR_TOLERANCE: f32 = 0.05;
-const ANGULAR_TOLERANCE: f32 = 0.05;
+const PIVOT_LINEAR_GAIN: f32 = 5.0;
+const PIVOT_ANGULAR_GAIN: f32 = 20.0;
 
 impl MotionManager {
     pub fn new() -> Self {
@@ -47,19 +47,20 @@ impl MotionManager {
                 vx: 0.0,
                 omega: 0.0,
             },
-            Motion::Pivot { pose } => {
+            Motion::Pivot {
+                pose,
+                ignore_translation,
+            } => {
                 self.current_pose = current_pose;
                 // Desired pose relative to the drivebase
                 let pose_error = current_pose.inv_mul(&pose);
 
-                if pose_error.translation.vector.norm() < LINEAR_TOLERANCE
-                    && pose_error.rotation.angle().abs() < ANGULAR_TOLERANCE
-                {
-                    self.target = Motion::Idle
-                }
-
                 ChassisSpeeds {
-                    vx: PIVOT_LINEAR_GAIN * pose_error.translation.x,
+                    vx: if ignore_translation {
+                        0.0
+                    } else {
+                        PIVOT_LINEAR_GAIN * pose_error.translation.x
+                    },
                     omega: PIVOT_ANGULAR_GAIN * pose_error.rotation.angle(),
                 }
             }
