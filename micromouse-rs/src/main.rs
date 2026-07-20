@@ -167,7 +167,7 @@ fn main() -> ! {
         .listen(Event::TimeOut);
     unsafe { NVIC::unmask(interrupt::TIM7) };
     // Give time for hardware to initialise
-    delay.delay_ms(100);
+    delay.delay_ms(500);
     print!("Initialisation Complete!\r\n");
 
     // Reset and enable the timer peripheral.
@@ -272,10 +272,11 @@ fn main() -> ! {
 
     motion_manager.set_target(Motion::Pivot {
         pose: Isometry2::new(Vector2::new(0.0, 0.0), -f32::consts::FRAC_PI_2),
+        ignore_translation: true,
     });
 
     // Let the state observer settle
-    for i in 1..200 {
+    for _ in 1..450 {
         encoder_left.update();
         encoder_right.update();
         imu.update();
