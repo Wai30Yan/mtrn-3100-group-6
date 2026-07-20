@@ -5,8 +5,8 @@ use na::{Isometry2, SMatrix, SVector, Vector2};
 
 use crate::{DT, encoder::Encoder, imu::Imu, print};
 
-const R: f32 = 0.032;
-const B: f32 = 0.086;
+pub const R: f32 = 0.032;
+pub const B: f32 = 0.086;
 const IX: f32 = 0.011;
 const IY: f32 = 0.020;
 
@@ -95,7 +95,12 @@ impl StateObserver {
             // TODO: set correct covars
             q.fixed_view_mut::<6, 6>(9, 9)
                 .set_diagonal(&SVector::from_column_slice(&[
-                    0.001, 0.001, 0.01, 0.001, 0.001, 0.001,
+                    0.001,
+                    0.001,
+                    0.01,
+                    0.001 * 1_000_000.0,
+                    0.001 * 1_000_000.0,
+                    0.001 * 1_000_000.0,
                 ]));
             q.try_inverse().unwrap()
         };
