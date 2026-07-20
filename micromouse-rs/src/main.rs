@@ -43,6 +43,7 @@ extern crate nalgebra as na;
 pub mod encoder;
 pub mod imu;
 pub mod lidar;
+pub mod motion_manager;
 pub mod motor;
 pub mod serial;
 pub mod state_observer;
@@ -50,6 +51,18 @@ pub mod state_observer;
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
 
 const TIMESTEP_MS: u32 = 10;
+const DT: f32 = 0.01;
+
+pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
+    a: &[T; A],
+    b: &[T; B],
+) -> [T; A + B] {
+    let mut whole: [T; A + B] = [Default::default(); A + B];
+    let (one, two) = whole.split_at_mut(A);
+    one.copy_from_slice(a);
+    two.copy_from_slice(b);
+    whole
+}
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -267,7 +280,6 @@ fn main() -> ! {
 
         motor_left.set_speed(3.0);
         motor_right.set_speed(3.0);
-
 
         print!("{:?}\r\n", observer.pose());
         /*
