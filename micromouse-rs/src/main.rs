@@ -10,7 +10,7 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, panic::PanicInfo};
+use core::{cell::RefCell, f32, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
@@ -166,8 +166,8 @@ fn main() -> ! {
         .start_count_down(1.millis())
         .listen(Event::TimeOut);
     unsafe { NVIC::unmask(interrupt::TIM7) };
-    // Give time to connect via USB
-    delay.delay_ms(5000);
+    // Give time for hardware to initialise
+    delay.delay_ms(100);
     print!("Initialisation Complete!\r\n");
 
     // Reset and enable the timer peripheral.
@@ -270,10 +270,19 @@ fn main() -> ! {
 
     let mut motion_manager = MotionManager::new();
 
-    motion_manager.set_target(Motion::Path {
-        pose: Isometry2::new(Vector2::new(0.2, 0.0), 0.0),
-        speed: 0.0,
+    motion_manager.set_target(Motion::Pivot {
+        pose: Isometry2::new(Vector2::new(0.0, 0.0), -f32::consts::FRAC_PI_2),
     });
+
+    // Let the state observer settle
+    for i in 1..200 {
+        encoder_left.update();
+        encoder_right.update();
+        imu.update();
+        observer.update(true, &imu, &encoder_left, &encoder_right);
+
+        block!(period_timer.wait()).unwrap();
+    }
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -286,16 +295,16 @@ fn main() -> ! {
 
         imu.update();
 
-        observer.update(&imu, &encoder_left, &encoder_right);
+        observer.update(false, &imu, &encoder_left, &encoder_right);
 
         let desired = motion_manager.update(observer.pose());
-        print!("{:?}\r\n", desired);
         let (wl, wr) = desired.to_wheel_velocities();
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
 
         print!("{:?}\r\n", observer.pose());
+
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
          * finish all our work within 10ms, wait for the remaining time to pass

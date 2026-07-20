@@ -12,7 +12,7 @@ pub struct Imu<'a> {
 
 const ADDRESS: u8 = 0x68;
 const ACCEL_FACTOR: f32 = 9.81 / 8192.0;
-const GYRO_FACTOR: f32 = f32::consts::PI / (32.75 * 180.0);
+const GYRO_FACTOR: f32 = f32::consts::PI / (65.5 * 180.0);
 
 const PWR_MGMT_1_REG: u8 = 0x6b;
 const SMPLRT_DIV_REG: u8 = 0x19;

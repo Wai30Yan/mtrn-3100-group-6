@@ -10,6 +10,9 @@ pub const B: f32 = 0.086;
 const IX: f32 = 0.011;
 const IY: f32 = 0.020;
 
+const ENCODER_COVAR: f32 = 0.001;
+const IMU_COVAR: f32 = 0.001; // * 1_000_000.0;
+
 pub struct StateObserver {
     // The state vector contains the translation, velocities, linear
     // accelerations and IMU biases
@@ -27,9 +30,11 @@ pub struct StateObserver {
 impl StateObserver {
     pub fn new() -> Self {
         Self {
-            state: SVector::zeros(),
+            state: SVector::from_column_slice(&[
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0,
+            ]),
             covar: SMatrix::from_diagonal(&SVector::from_column_slice(&[
-                0.0025, 0.0025, 0.04, 0.0001, 0.0001, 0.01, 0.04, 0.04, 0.04,
+                0.0025, 0.0025, 0.04, 0.01, 0.01, 0.01, 0.04, 0.04, 0.04,
             ])),
 
             prev_left: 0.0,
@@ -37,7 +42,13 @@ impl StateObserver {
         }
     }
 
-    pub fn update(&mut self, imu: &Imu, encoder_left: &dyn Encoder, encoder_right: &dyn Encoder) {
+    pub fn update(
+        &mut self,
+        trust_encoder: bool,
+        imu: &Imu,
+        encoder_left: &dyn Encoder,
+        encoder_right: &dyn Encoder,
+    ) {
         /*
          * We are not using the standard formula of the Kalman Filter for the
          * update step as we do not have a model of the system just
@@ -92,15 +103,16 @@ impl StateObserver {
             let mut upper = q.fixed_view_mut::<9, 9>(0, 0);
             upper += self.covar;
 
+            let encoder_mul = if trust_encoder { 1.0 } else { 1_000_000.0 };
             // TODO: set correct covars
             q.fixed_view_mut::<6, 6>(9, 9)
                 .set_diagonal(&SVector::from_column_slice(&[
-                    0.001,
-                    0.001,
+                    ENCODER_COVAR * encoder_mul,
+                    ENCODER_COVAR * encoder_mul,
                     0.01,
-                    0.001 * 1_000_000.0,
-                    0.001 * 1_000_000.0,
-                    0.001 * 1_000_000.0,
+                    IMU_COVAR * 1_000_000.0,
+                    IMU_COVAR * 1_000_000.0,
+                    IMU_COVAR,
                 ]));
             q.try_inverse().unwrap()
         };
