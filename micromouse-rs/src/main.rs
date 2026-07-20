@@ -5,6 +5,7 @@
 #![feature(unsafe_cell_access)]
 #![feature(core_intrinsics)]
 #![feature(generic_const_exprs)]
+#![feature(clamp_magnitude)]
 
 #[macro_use]
 extern crate alloc;
@@ -14,6 +15,7 @@ use core::{cell::RefCell, panic::PanicInfo};
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
+use na::{Isometry2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
@@ -31,8 +33,9 @@ use stm32g4xx_hal::{
 };
 
 use crate::{
-    encoder::{Encoder, EncoderInstance},
+    encoder::EncoderInstance,
     imu::Imu,
+    motion_manager::{Motion, MotionManager},
     motor::Motor,
     serial::UsbSerial,
     state_observer::StateObserver,
@@ -226,7 +229,7 @@ fn main() -> ! {
             gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
             gpioa.pa9.into_alternate_open_drain().internal_pull_up(true),
         ),
-        400.kHz(),
+        100.kHz(),
         &mut rcc,
     );
     let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
@@ -265,6 +268,13 @@ fn main() -> ! {
 
     let mut observer = StateObserver::new();
 
+    let mut motion_manager = MotionManager::new();
+
+    motion_manager.set_target(Motion::Path {
+        pose: Isometry2::new(Vector2::new(0.2, 0.0), 0.0),
+        speed: 0.0,
+    });
+
     /*
      * Because we are not building on top of any framework, everything goes into
      * the main function. There is no `loop` function like Arduino, but it is
@@ -278,8 +288,12 @@ fn main() -> ! {
 
         observer.update(&imu, &encoder_left, &encoder_right);
 
-        motor_left.set_speed(3.0);
-        motor_right.set_speed(3.0);
+        let desired = motion_manager.update(observer.pose());
+        print!("{:?}\r\n", desired);
+        let (wl, wr) = desired.to_wheel_velocities();
+
+        motor_left.set_speed(wl);
+        motor_right.set_speed(wr);
 
         print!("{:?}\r\n", observer.pose());
         /*

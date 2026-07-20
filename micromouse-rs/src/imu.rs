@@ -54,10 +54,15 @@ impl<'a> Imu<'a> {
     /// Read and buffer measurements from the IMU
     pub fn update(&mut self) {
         let mut buf = [0u8; 14];
-        self.i2c_bus
+        if self
+            .i2c_bus
             .borrow_mut()
             .write_read(ADDRESS, &[0x3b], &mut buf)
-            .unwrap();
+            .is_err()
+        {
+            // Supress crashes, very sus
+            return;
+        }
 
         self.ax = i16::from_be_bytes(buf[0..2].try_into().unwrap()) as f32 * ACCEL_FACTOR;
         self.ay = i16::from_be_bytes(buf[2..4].try_into().unwrap()) as f32 * ACCEL_FACTOR;
