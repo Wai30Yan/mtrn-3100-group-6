@@ -32,8 +32,8 @@ impl<'a> Motor<'a> {
             PinState::Low
         });
 
-        let max_duty = self.pwm.get_max_duty() as f32;
+        let max_duty = self.pwm.get_max_duty() as f32 / 2.0;
         self.pwm
-            .set_duty(MIN_DUTY.max(max_duty.min((v * KV + KS) * max_duty) as u16));
+            .set_duty(MIN_DUTY.max(max_duty.min((v.abs() * KV + KS) * max_duty) as u16));
     }
 }
