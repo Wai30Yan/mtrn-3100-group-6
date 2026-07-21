@@ -93,8 +93,8 @@ pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
 pub struct Lidar<'a> {
     i2c_bus: &'a I2cBus<'a>,
     address: u8,
-    distance: Option<f32>, 
-    ptp_offset: u8,  // for scaling math, not for callibrating physical mounting distance 
+    distance: Option<f32>,
+    ptp_offset: u8, // for scaling math, not for callibrating physical mounting distance
 }
 
 impl<'a> Lidar<'a> {
@@ -178,7 +178,10 @@ impl<'a> Lidar<'a> {
     fn write_reg16(&mut self, reg: u16, val: u16) {
         self.i2c_bus
             .borrow_mut()
-            .write(self.address, &concat(&reg.to_be_bytes(), &val.to_be_bytes()))
+            .write(
+                self.address,
+                &concat(&reg.to_be_bytes(), &val.to_be_bytes()),
+            )
             .unwrap();
     }
 
@@ -189,11 +192,11 @@ impl<'a> Lidar<'a> {
         if (status & 0x07) != 0x04 {
             return nb::Result::Err(WouldBlock);
         }
-        
+
         // TODO: convert from raw value to m
         let raw_range = self.read_reg(RESULT_RANGE_VAL);
         let scaler = self.read_reg(RANGE_SCALER);
-        
+
         // Default scaling factor is 1.0, but if the scaler is set to 127 or 84, we need to adjust the scaling factor accordingly.
         let scaling_factor = match scaler {
             253 => 1.0,
@@ -208,7 +211,7 @@ impl<'a> Lidar<'a> {
             let distance_mm = (raw_range as f32) * scaling_factor;
             self.distance = Some(distance_mm / 1000.0); // convert to meters
         }
-        
+
         self.write_reg(SYSTEM_INTERRUPT_CLEAR, 0x01);
         nb::Result::Ok(())
     }
@@ -221,7 +224,7 @@ impl<'a> Lidar<'a> {
         (self.read_reg(RESULT_RANGE_STATUS) >> 4) & 0x0F
     }
 
-    // Callibrate physical mounting distance 
+    // Callibrate physical mounting distance
     pub fn set_range_offset(&mut self, offset: u8) {
         self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, offset);
     }
@@ -252,12 +255,17 @@ impl<'a> Lidar<'a> {
         if scaling < 1 || scaling > 3 {
             panic!("Scaling must be between 1 and 3");
         }
-        self.write_reg16(RANGE_SCALER, SCALER_VALUES[scaling as usize].try_into().unwrap());
-        self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, self.ptp_offset / scaling as u8);
+        self.write_reg16(
+            RANGE_SCALER,
+            SCALER_VALUES[scaling as usize].try_into().unwrap(),
+        );
+        self.write_reg(
+            SYSRANGE_PART_TO_PART_RANGE_OFFSET,
+            self.ptp_offset / scaling as u8,
+        );
         self.write_reg(SYSRANGE_CROSSTALK_VALID_HEIGHT, 20 / scaling);
 
         let rce = self.read_reg(SYSRANGE_RANGE_CHECK_ENABLES);
         self.write_reg(SYSRANGE_RANGE_CHECK_ENABLES, (rce & 0xFE) | scaling); // enable range ignore threshold check
-
     }
 }
