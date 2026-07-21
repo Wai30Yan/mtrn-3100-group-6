@@ -10,8 +10,8 @@ pub const B: f32 = 0.086;
 const IX: f32 = 0.011;
 const IY: f32 = 0.020;
 
-const ENCODER_COVAR: f32 = 0.001;
-const IMU_COVAR: f32 = 0.001; // * 1_000_000.0;
+const ENCODER_COVAR: f32 = 0.002;
+const IMU_COVAR: f32 = 0.0008; // * 1_000_000.0;
 
 pub struct StateObserver {
     // The state vector contains the translation, velocities, linear

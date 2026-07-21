@@ -54,8 +54,8 @@ const MAX_ACCELERATION: f32 = 0.10;
 const MAX_ANGULAR: f32 = 2.0;
 const OVERSHOOT_GAIN: f32 = 0.2;
 
-const GAMMA_GAIN: f32 = 0.2;
-const B_GAIN: f32 = 50.0;
+const GAMMA_GAIN: f32 = 0.3;
+const B_GAIN: f32 = 20.0;
 
 const LINEAR_TOLERANCE: f32 = 0.03;
 const ANGULAR_TOLERANCE: f32 = 0.03;
@@ -111,7 +111,7 @@ impl MotionManager {
                 final_speed,
             } => {
                 let path_delta = final_position / self.current_pose.translation;
-                if path_delta.vector.norm() <= EPSILON {
+                if path_delta.vector.norm() <= LINEAR_TOLERANCE {
                     self.current_pose.translation = final_position;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
@@ -125,7 +125,7 @@ impl MotionManager {
                     self.current_pose *= Translation2::new(self.current_speed * DT, 0.0);
                 }
 
-                Self::ramsete(
+                Self::dumb_follow(
                     observed_pose,
                     self.current_pose,
                     ChassisSpeeds {
@@ -187,11 +187,29 @@ impl MotionManager {
             2.0 * GAMMA_GAIN * f32::hypot(desired_speeds.omega, B_GAIN.sqrt() * desired_speeds.vx);
 
         ChassisSpeeds {
-            vx: desired_speeds.vx * error.rotation.cos_angle() + k * error.translation.x,
-            omega: desired_speeds.omega
+            vx: (desired_speeds.vx * error.rotation.cos_angle() + k * error.translation.x)
+                .clamp_magnitude(MAX_VELOCITY * 1.2),
+            omega: (desired_speeds.omega
                 + k * error.rotation.angle()
                 + (B_GAIN * desired_speeds.vx * error.rotation.sin_angle() * error.translation.y)
-                    / error.rotation.angle(),
+                    / error.rotation.angle())
+            .clamp_magnitude(MAX_ANGULAR * 1.2),
+        }
+    }
+
+    fn dumb_follow(
+        observed_pose: Isometry2<f32>,
+        desired_pose: Isometry2<f32>,
+        desired_speeds: ChassisSpeeds,
+    ) -> ChassisSpeeds {
+        let error = observed_pose.inv_mul(&desired_pose);
+        ChassisSpeeds {
+            vx: desired_speeds.vx
+                + (BASIC_LINEAR_GAIN * error.translation.x).clamp_magnitude(MAX_VELOCITY * 0.2),
+            omega: desired_speeds.omega
+                + (BASIC_ANGULAR_GAIN * error.rotation.angle()
+                    + BASIC_LINEAR_GAIN * error.translation.y)
+                    .clamp_magnitude(MAX_ANGULAR * 0.2),
         }
     }
 }
