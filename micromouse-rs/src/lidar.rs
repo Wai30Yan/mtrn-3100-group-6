@@ -94,7 +94,7 @@ pub struct Lidar<'a> {
     i2c_bus: &'a I2cBus<'a>,
     address: u8,
     distance: f32,
-    ptp_offset: u8,
+    ptp_offset: u8,  // for scaling math, not for callibrating physical mounting distance 
 }
 
 impl<'a> Lidar<'a> {
@@ -180,49 +180,47 @@ impl<'a> Lidar<'a> {
             .unwrap();
     }
 
-    // fn read_reg16(&mut self, reg: u16) -> u16 {
-    //     let mut buf = [0u8; 2];
-    //     self.i2c_bus
-    //         .borrow_mut()
-    //         .write_read(self.address, &reg.to_be_bytes(), &mut buf)
-    //         .unwrap();
-
-    //     u16::from_be_bytes(buf)
-    // }
-
-    // fn write_reg32(&mut self, reg: u16, val: u32) {
-    //     self.i2c_bus
-    //         .borrow_mut()
-    //         .write(self.address, &concat(&reg.to_be_bytes(), &val.to_be_bytes()))
-    //         .unwrap();
-    // }
-
-    // fn read_reg32(&mut self, reg: u16) -> u32 {
-    //     let mut buf = [0u8; 4];
-    //     self.i2c_bus
-    //         .borrow_mut()
-    //         .write_read(self.address, &reg.to_be_bytes(), &mut buf)
-    //         .unwrap();
-
-    //     u32::from_be_bytes(buf)
-    // }
-
+    // same as readRangeContinuous, but returns nb::Result::Err(WouldBlock) if the value is not ready
     pub fn update(&mut self) -> nb::Result<(), !> {
-        // TODO: convert from raw value to m
-        self.distance = self.read_reg(RESULT_RANGE_VAL) as f32;
-        self.write_reg(SYSTEM_INTERRUPT_CLEAR, 0x01);
-
         // TODO: return nb::Result::Err(WouldBlock) if the value is not ready
+        let status = self.read_reg(RESULT_INTERRUPT_STATUS_GPIO);
+        if (status & 0x07) != 0x04 {
+            return nb::Result::Err(WouldBlock);
+        }
+        
+        // TODO: convert from raw value to m
+        let raw_range = self.read_reg(RESULT_RANGE_VAL);
+        let scaler = self.read_reg(RANGE_SCALER);
+        
+        // Default scaling factor is 1.0, but if the scaler is set to 127 or 84, we need to adjust the scaling factor accordingly.
+        let scaling_factor = match scaler {
+            253 => 1.0,
+            127 => 2.0,
+            84 => 3.0,
+            _ => 1.0,
+        };
+        
+        let distance_mm = (raw_range as f32) * scaling_factor;
+        self.distance = distance_mm / 1000.0; // convert to meters
+
         nb::Result::Ok(())
+    }
+
+    pub fn start_range_continuous(&mut self) {
+        self.write_reg(SYSRANGE_START, 0x03);
+    }
+
+    pub fn range_status(&mut self) -> u8 {
+        (self.read_reg(RESULT_RANGE_STATUS) >> 4) & 0x0F
+    }
+
+    // Callibrate physical mounting distance 
+    pub fn set_range_offset(&mut self, offset: u8) {
+        self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, offset);
     }
 
     pub fn distance(&self) -> f32 {
         self.distance
-    }
-
-    pub fn read_range_continuous(&mut self) -> u8 {
-        self.write_reg(SYSRANGE_START, 0x03);
-        self.read_reg(RESULT_RANGE_VAL)
     }
 
     pub fn configure_default(&mut self) {
@@ -248,8 +246,7 @@ impl<'a> Lidar<'a> {
             panic!("Scaling must be between 1 and 3");
         }
         self.write_reg16(RANGE_SCALER, SCALER_VALUES[scaling as usize].try_into().unwrap());
-        let new_ptp_offset = self.ptp_offset / scaling as u8;
-        self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, new_ptp_offset);
+        self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, self.ptp_offset / scaling as u8);
         self.write_reg(SYSRANGE_CROSSTALK_VALID_HEIGHT, 20 / scaling);
 
         let rce = self.read_reg(SYSRANGE_RANGE_CHECK_ENABLES);
