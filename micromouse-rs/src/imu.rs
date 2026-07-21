@@ -1,6 +1,8 @@
 use core::f32;
 
-use crate::I2cBus;
+use cortex_m::asm::delay;
+
+use crate::{I2cBus, print};
 
 pub struct Imu<'a> {
     i2c_bus: &'a I2cBus<'a>,
@@ -54,14 +56,12 @@ impl<'a> Imu<'a> {
     /// Read and buffer measurements from the IMU
     pub fn update(&mut self) {
         let mut buf = [0u8; 14];
-        if self
+        if let Err(e) = self
             .i2c_bus
             .borrow_mut()
             .write_read(ADDRESS, &[0x3b], &mut buf)
-            .is_err()
         {
-            // Supress crashes, very sus
-            return;
+            print!("{:?}\r\n", e);
         }
 
         self.ax = i16::from_be_bytes(buf[0..2].try_into().unwrap()) as f32 * ACCEL_FACTOR;
