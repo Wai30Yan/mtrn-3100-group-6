@@ -10,12 +10,12 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, panic::PanicInfo};
+use core::{cell::RefCell, f32, panic::PanicInfo, todo, unimplemented};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use na::{Isometry2, Vector2};
+use na::{Isometry2, Rotation2, Translation2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
@@ -54,7 +54,14 @@ pub mod state_observer;
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
 
 const TIMESTEP_MS: u32 = 10;
-const DT: f32 = 0.01;
+const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
+
+enum Task {
+    StraightLineTracking,
+    DrivingAndStopping,
+    Turning,
+    ChainingMovements(&'static str),
+}
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
     a: &[T; A],
@@ -229,14 +236,14 @@ fn main() -> ! {
             gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
             gpioa.pa9.into_alternate_open_drain().internal_pull_up(true),
         ),
-        100.kHz(),
+        10.kHz(),
         &mut rcc,
     );
     let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
 
     // Run at a higher frequency than the Arduino for smoother motion
-    let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 6.kHz(), &mut rcc);
-    let mut motor_r_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 6.kHz(), &mut rcc);
+    let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 24.kHz(), &mut rcc);
+    let mut motor_r_pwm = dp.TIM15.pwm(gpioa.pa2.into_alternate(), 24.kHz(), &mut rcc);
 
     /*
      * Time to actually create our high level objects using the periherals
@@ -270,11 +277,6 @@ fn main() -> ! {
 
     let mut motion_manager = MotionManager::new();
 
-    motion_manager.set_target(Motion::Pivot {
-        pose: Isometry2::new(Vector2::new(0.0, 0.0), -f32::consts::FRAC_PI_2),
-        ignore_translation: true,
-    });
-
     // Let the state observer settle
     for _ in 1..450 {
         encoder_left.update();
@@ -284,6 +286,27 @@ fn main() -> ! {
 
         block!(period_timer.wait()).unwrap();
     }
+
+    let task = Task::ChainingMovements("flfrrflr");
+
+    match task {
+        Task::StraightLineTracking => {
+            motion_manager.set_target(Motion::Line {
+                final_position: Translation2::new(1.05, 0.0),
+                final_speed: 0.0,
+            });
+        }
+        Task::DrivingAndStopping => {
+            motion_manager.set_target(Motion::Line {
+                final_position: Translation2::new(0.11, 0.0),
+                final_speed: 0.0,
+            });
+        }
+        Task::Turning => {}
+        Task::ChainingMovements(_) => {}
+    }
+
+    let mut motion_index: usize = 0;
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -296,15 +319,72 @@ fn main() -> ! {
 
         imu.update();
 
-        observer.update(false, &imu, &encoder_left, &encoder_right);
+        // Do not trust the encoders for the turning task as the robot is lifted
+        observer.update(
+            if let Task::Turning = task {
+                false
+            } else {
+                true
+            },
+            &imu,
+            &encoder_left,
+            &encoder_right,
+        );
+
+        match task {
+            Task::StraightLineTracking => {}
+            Task::DrivingAndStopping => {
+                if motion_manager.idle() {
+                    // Relative to wall
+                    motion_manager.set_target(todo!());
+                }
+            }
+            Task::Turning => {
+                motion_manager.set_target(Motion::Pivot {
+                    rotation: Rotation2::new(-f32::consts::FRAC_PI_2),
+                });
+            }
+            Task::ChainingMovements(cmd) => {
+                if motion_manager.idle()
+                    && let Some(c) = cmd.chars().nth(motion_index)
+                {
+                    motion_index += 1;
+                    motion_manager.set_target(match c {
+                        'l' => Motion::Pivot {
+                            rotation: (motion_manager.pose().rotation
+                                * Rotation2::new(f32::consts::FRAC_PI_2))
+                            .into(),
+                        },
+                        'r' => Motion::Pivot {
+                            rotation: (motion_manager.pose().rotation
+                                * Rotation2::new(-f32::consts::FRAC_PI_2))
+                            .into(),
+                        },
+                        'f' => Motion::Line {
+                            final_position: (motion_manager.pose()
+                                * Isometry2::new(Vector2::new(0.18, 0.0), 0.0))
+                            .translation,
+                            final_speed: 0.0,
+                        },
+                        _ => {
+                            unimplemented!("Invalid command")
+                        }
+                    });
+                }
+            }
+        }
 
         let desired = motion_manager.update(observer.pose());
         let (wl, wr) = desired.to_wheel_velocities();
 
+        // print!("{:?}\r\n", observer.pose());
+        // delay.delay_ms(1);
+        print!("{:?}\r\n", motion_manager.pose());
+        // delay.delay_ms(1);
+        // print!("{:?}\r\n", desired.to_wheel_velocities());
+
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
-
-        print!("{:?}\r\n", observer.pose());
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
