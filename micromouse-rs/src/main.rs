@@ -5,10 +5,7 @@
 #![feature(unsafe_cell_access)]
 #![feature(core_intrinsics)]
 #![feature(generic_const_exprs)]
-<<<<<<< HEAD
 #![feature(clamp_magnitude)]
-=======
->>>>>>> a5dec54 (Refactor the lidar to use read and write functions)
 
 #[macro_use]
 extern crate alloc;
@@ -36,7 +33,13 @@ use stm32g4xx_hal::{
 };
 
 use crate::{
-    encoder::EncoderInstance, imu::Imu, lidar::Lidar, motion_manager::{Motion, MotionManager}, motor::Motor, serial::UsbSerial, state_observer::StateObserver,
+    encoder::EncoderInstance,
+    imu::Imu,
+    lidar::Lidar,
+    motion_manager::{Motion, MotionManager},
+    motor::Motor,
+    serial::UsbSerial,
+    state_observer::StateObserver,
 };
 
 extern crate nalgebra as na;
@@ -291,26 +294,6 @@ fn main() -> ! {
     let mut lidar_r = Lidar::new(&i2c_bus, lidar_r_en, LIDAR_ADDR_R);
     let mut lidar_f = Lidar::new(&i2c_bus, lidar_f_en, LIDAR_ADDR_F);
 
-    lidar_pin_l.set_high();
-    let mut lidar_l = Lidar::new(&i2c_bus, LIDAR_ADDR_L);
-    delay.delay_ms(100);
-    print!("LIDAR L initialised\r\n");
-    print!("LIDAR L distance: {} mm\r\n", lidar_l.get_distance());
-    lidar_pin_l.set_low();
-
-    lidar_pin_r.set_high();
-    let mut lidar_r = Lidar::new(&i2c_bus, LIDAR_ADDR_R);
-    delay.delay_ms(100);
-    print!("LIDAR R initialised\r\n");
-    print!("LIDAR R distance: {} mm\r\n", lidar_r.get_distance());
-    lidar_pin_r.set_low();
-
-    lidar_pin_f.set_high();
-    let mut lidar_f = Lidar::new(&i2c_bus, LIDAR_ADDR_F);
-    delay.delay_ms(100);
-    print!("LIDAR F initialised\r\n");
-    print!("LIDAR F distance: {} mm\r\n", lidar_f.get_distance());
-
     let mut observer = StateObserver::new();
 
     let mut motion_manager = MotionManager::new();
@@ -334,12 +317,7 @@ fn main() -> ! {
                 final_speed: 0.0,
             });
         }
-        Task::DrivingAndStopping => {
-            motion_manager.set_target(Motion::Line {
-                final_position: Translation2::new(0.11, 0.0),
-                final_speed: 0.0,
-            });
-        }
+        Task::DrivingAndStopping => {}
         Task::Turning => {}
         Task::ChainingMovements(_) => {}
     }
@@ -352,6 +330,8 @@ fn main() -> ! {
      * pretty simple for us to define our own main loop.
      */
     loop {
+        imu.update();
+
         encoder_left.update();
         encoder_right.update();
 
@@ -359,13 +339,28 @@ fn main() -> ! {
         lidar_r.update();
         lidar_f.update();
 
+        observer.update(
+            if let Task::Turning = task {
+                false
+            } else {
+                true
+            },
+            &imu,
+            &encoder_left,
+            &encoder_right,
+        );
+
         match task {
             Task::StraightLineTracking => {}
             Task::DrivingAndStopping => {
-                if motion_manager.idle() {
-                    // Relative to wall
-                    motion_manager.set_target(todo!());
-                }
+                // Relative to wall
+                motion_manager.set_target(Motion::Pose {
+                    pose: Isometry2::new(
+                        observer.pose().translation.vector
+                            + Vector2::new(lidar_f.distance().unwrap_or(0.20) - 0.10, 0.0),
+                        0.0,
+                    ),
+                });
             }
             Task::Turning => {
                 motion_manager.set_target(Motion::Pivot {
@@ -404,14 +399,8 @@ fn main() -> ! {
 
         let desired = motion_manager.update(observer.pose());
         let (wl, wr) = desired.to_wheel_velocities();
-        print!(
-            "Ll: {} mm\tLr: {} mm\tLf: {} mm\r\n",
-            lidar_l.distance(),
-            lidar_r.distance(),
-            lidar_f.distance()
-        );
 
-        // print!("{:?}\r\n", observer.pose());
+        print!("{:?}\r\n", observer.pose());
         // delay.delay_ms(1);
         print!("{:?}\r\n", motion_manager.pose());
         // delay.delay_ms(1);
@@ -419,6 +408,13 @@ fn main() -> ! {
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
+
+        print!(
+            "Ll: {:?} m\tLr: {:?} m\tLf: {:?} m\r\n",
+            lidar_l.distance(),
+            lidar_r.distance(),
+            lidar_f.distance()
+        );
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
