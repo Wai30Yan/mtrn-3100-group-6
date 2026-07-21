@@ -93,7 +93,7 @@ pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
 pub struct Lidar<'a> {
     i2c_bus: &'a I2cBus<'a>,
     address: u8,
-    distance: f32,
+    distance: Option<f32>, 
     ptp_offset: u8,  // for scaling math, not for callibrating physical mounting distance 
 }
 
@@ -110,7 +110,7 @@ impl<'a> Lidar<'a> {
         let mut lidar = Self {
             i2c_bus,
             address: DEFAULT_LIDAR_ADDR,
-            distance: 0.0,
+            distance: None,
             ptp_offset: 0,
         };
 
@@ -152,6 +152,8 @@ impl<'a> Lidar<'a> {
 
         // update ptp_offset
         lidar.ptp_offset = lidar.read_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET) as u8;
+        lidar.configure_default();
+        lidar.start_range_continuous();
 
         lidar
     }
@@ -199,10 +201,15 @@ impl<'a> Lidar<'a> {
             84 => 3.0,
             _ => 1.0,
         };
-        
-        let distance_mm = (raw_range as f32) * scaling_factor;
-        self.distance = distance_mm / 1000.0; // convert to meters
 
+        if raw_range == 255 {
+            self.distance = None;
+        } else {
+            let distance_mm = (raw_range as f32) * scaling_factor;
+            self.distance = Some(distance_mm / 1000.0); // convert to meters
+        }
+        
+        self.write_reg(SYSTEM_INTERRUPT_CLEAR, 0x01);
         nb::Result::Ok(())
     }
 
@@ -219,7 +226,7 @@ impl<'a> Lidar<'a> {
         self.write_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET, offset);
     }
 
-    pub fn distance(&self) -> f32 {
+    pub fn distance(&self) -> Option<f32> {
         self.distance
     }
 
