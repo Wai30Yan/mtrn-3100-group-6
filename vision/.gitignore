@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+tests/synth_out/
+*.corners.json
+capture_cam*.png
+*_overlay.png
+!test_images/maze_fixed_cam_overlay_example.png
