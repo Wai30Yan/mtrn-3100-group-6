@@ -1,9 +1,9 @@
-use core::cmp::min;
-
 use stm32g4xx_hal::{
     gpio::{AnyPin, Output, PinState, PushPull},
     hal_02::PwmPin,
 };
+
+use crate::print;
 
 pub struct Motor<'a> {
     pwm: &'a mut dyn PwmPin<Duty = u16>,
@@ -11,8 +11,8 @@ pub struct Motor<'a> {
     invert: bool,
 }
 
-const KV: f32 = 0.038;
-const KS: f32 = 0.005;
+const KV: f32 = 0.040;
+const KS: f32 = 0.006;
 const MIN_DUTY: u16 = 256;
 
 impl<'a> Motor<'a> {
@@ -34,8 +34,7 @@ impl<'a> Motor<'a> {
             PinState::Low
         });
 
-        let max_duty = self.pwm.get_max_duty() as f32;
-        self.pwm
-            .set_duty(MIN_DUTY.max(max_duty.min((v * KV + KS) * max_duty) as u16));
+        let duty = ((v.abs() * KV + KS) * (self.pwm.get_max_duty() as f32)) as u16;
+        self.pwm.set_duty(if duty < MIN_DUTY { 0 } else { duty });
     }
 }
