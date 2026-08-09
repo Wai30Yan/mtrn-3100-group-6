@@ -249,6 +249,13 @@ def obstacle_grid_and_cylinders(n=9, chamfer=1, region=(2, 2), region_cells=5,
                 r2, c2 = r + ml.DR[d], c + ml.DC[d]
                 if r0 <= r2 < r0 + region_cells and c0 <= c2 < c0 + region_cells:
                     grid.remove_wall(r, c, d)
+    # The course has exactly one entrance and one exit (spec 4.2): carve them
+    # in the region boundary, mid-way along the W and E sides.
+    mid = r0 + region_cells // 2
+    entry = (mid, c0, ml.E)                  # entered travelling east
+    exit_cell = (mid, c0 + region_cells - 1)
+    grid.remove_wall(mid, c0, ml.W)
+    grid.remove_wall(mid, c0 + region_cells - 1, ml.E)
     cyls = []
     mm_px = ml.CELL_MM / k
     margin_px = int(140 / mm_px)                     # keep off region border
@@ -268,7 +275,7 @@ def obstacle_grid_and_cylinders(n=9, chamfer=1, region=(2, 2), region_cells=5,
             continue
         if all((x - a) ** 2 + (y - b) ** 2 > min_sep ** 2 for a, b in cyls):
             cyls.append((x, y))
-    return grid, cyls
+    return grid, cyls, entry, exit_cell
 
 
 def render_obstacles(grid, cyls, seed=0, k=ml.K, **kw):
@@ -299,7 +306,7 @@ def main():
     # obstacle-course scenes (4.2)
     for i in range(max(4, count // 3)):
         rng = random.Random(2000 + i)
-        grid, cyls = obstacle_grid_and_cylinders(rng=rng)
+        grid, cyls, entry, exit_cell = obstacle_grid_and_cylinders(rng=rng)
         img, corners = render_obstacles(grid, cyls, seed=2000 + i)
         name = f"course_{i:03d}"
         cv2.imwrite(os.path.join(out_dir, name + ".png"), img)
@@ -307,9 +314,10 @@ def main():
                    "blocked": grid.blocked.tolist(),
                    "corners": corners.tolist(),
                    "region": [2, 2], "region_cells": 5,
+                   "entry": list(entry), "exit": list(exit_cell),
                    "cylinders_px": cyls},
                   open(os.path.join(out_dir, name + ".json"), "w"))
-        print(f"{name}: {len(cyls)} cylinders")
+        print(f"{name}: {len(cyls)} cylinders, entry {entry}, exit {exit_cell}")
 
 
 if __name__ == "__main__":

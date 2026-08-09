@@ -85,14 +85,15 @@ def eval_image(png, verbose=True):
         elif got and not want:
             fp += 1
             bad.append(f"FP({r},{c},{ml.DIR_NAMES[d]})")
-    # end-to-end: plan on detected, must be valid on truth
+    # end-to-end: plan on detected, must be valid on truth - both as grid
+    # commands AND as the Motion array the robot actually executes
     rng = random.Random(hash(png) & 0xFFFF)
-    e2e_ok = e2e_ret = 0
+    e2e_ok = e2e_ret = mot_ok = 0
     trials = 12
     for _ in range(trials):
         s = (*random_open_cell(gt, rng), rng.randint(0, 3))
         g = random_open_cell(gt, rng)
-        cmds, _p = ml.solve(det, s, g)
+        cmds, path = ml.solve(det, s, g)
         if cmds is None:
             continue
         try:
@@ -102,12 +103,20 @@ def eval_image(png, verbose=True):
         except ValueError:
             pass
         e2e_ret += 1
+        # the emitted Motions must be runnable and clear of the TRUE walls
+        try:
+            motions = ml.path_to_motions(path, anchor=s, start_heading=s[2])
+            ok, _clear, _msg = ml.check_motions(motions, gt, s, g)
+            mot_ok += bool(ok)
+        except ValueError:
+            pass
     if verbose:
-        tag = "OK " if (fp == 0 and fn == 0) else "BAD"
+        tag = "OK " if (fp == 0 and fn == 0 and mot_ok == e2e_ret) else "BAD"
         print(f"{tag} {os.path.basename(png)}: FP={fp} FN={fn} "
-              f"e2e {e2e_ok}/{e2e_ret}  {' '.join(bad[:8])}")
+              f"e2e {e2e_ok}/{e2e_ret} motions {mot_ok}/{e2e_ret} "
+              f"{' '.join(bad[:8])}")
     return dict(ok=(fp == 0 and fn == 0), fp=fp, fn=fn,
-                e2e_ok=e2e_ok, e2e_n=e2e_ret)
+                e2e_ok=e2e_ok, e2e_n=e2e_ret, mot_ok=mot_ok)
 
 
 def eval_course(png, verbose=True):
@@ -129,42 +138,32 @@ def eval_course(png, verbose=True):
         if any((c.cx - gx) ** 2 + (c.cy - gy) ** 2 < 20 ** 2 for c in det):
             matched += 1
     extra = len(det) - matched
-    # plan west-side middle entry -> east-side middle exit
-    r0, c0 = region
-    entry = (r0 + rc // 2, c0, ml.E)
-    exit_cell = (r0 + rc // 2, c0 + rc - 1)
+    entry = tuple(meta["entry"])
+    exit_cell = tuple(meta["exit"])
     exit_dir = ml.E
     wps, _blocked = ml.plan_course(None, det, region, entry, exit_cell, rc,
                                    exit_dir=exit_dir)
     clear = end_ok = None
     if wps:
-        # Validate what the ROBOT will actually execute: integrate the
-        # emitted turn-and-drive segments from the entry cell centre.
-        segs = ml.waypoints_to_segments(wps, entry, exit_dir=exit_dir)
-        mm_px = ml.CELL_MM / ml.K
-        # entry heading E: robot +x = image +x, robot +y (left) = image -y
-        px, py = (entry[1] + 0.5) * ml.K, (entry[0] + 0.5) * ml.K
-        heading = 0.0
-        pts = [(px, py)]
-        for turn, dist in segs:
-            heading += math.radians(turn)
-            step_px = dist * 1000.0 / mm_px
-            px += step_px * math.cos(heading)
-            py -= step_px * math.sin(heading)
-            pts.append((px, py))
-        need = (75 + 50) / mm_px            # robot radius + cylinder radius
-        clear = True
-        for (x0_, y0_), (x1_, y1_) in zip(pts, pts[1:]):
-            for t in np.linspace(0, 1, 40):
-                qx, qy = x0_ + (x1_ - x0_) * t, y0_ + (y1_ - y0_) * t
-                for gx, gy in gt:
-                    if (qx - gx) ** 2 + (qy - gy) ** 2 < need ** 2:
-                        clear = False
-        # must end inside the exit cell, facing exit_dir (E = 0 deg relative)
-        exr, exc = exit_cell
-        end_ok = (abs(px - (exc + 0.5) * ml.K) < 50
-                  and abs(py - (exr + 0.5) * ml.K) < 50
-                  and abs((math.degrees(heading) + 180) % 360 - 180) < 1.0)
+        # Validate what the ROBOT actually executes: the emitted Motion list,
+        # simulated geometrically, against the TRUE walls and TRUE cylinders.
+        motions = ml.course_to_motions(wps, anchor=entry, exit_dir=exit_dir,
+                                       entry_cell=entry[:2],
+                                       exit_cell=exit_cell)
+        true_grid = grid_from_json(meta)
+        circles = [(*ml.px_to_world(gx, gy, entry), 0.05) for gx, gy in gt]
+        try:
+            pts, (fx, fy, fth) = ml.simulate_motions(motions)
+            clear_m = min(
+                ml.min_wall_clearance(pts, ml.wall_segments_world(true_grid, entry)),
+                min((math.hypot(px - cx, py - cy) - r
+                     for cx, cy, r in circles for px, py in pts), default=9.9))
+            clear = clear_m * 1000.0 >= 75.0        # robot radius
+            ex, ey = ml.cell_to_world(exit_cell[0], exit_cell[1], entry)
+            end_ok = (math.hypot(fx - ex, fy - ey) < ml.CELL_M / 2
+                      and abs((math.degrees(fth) + 180) % 360 - 180) < 1.0)
+        except ValueError:
+            clear, end_ok = False, False
     ok = (matched == len(gt) and extra == 0 and wps is not None
           and clear and end_ok)
     if verbose:
@@ -173,7 +172,7 @@ def eval_course(png, verbose=True):
                  else 'BAD-END' if not end_ok else 'clear')
         print(f"{'OK ' if ok else 'BAD'} {os.path.basename(png)}: "
               f"cylinders {matched}/{len(gt)} (+{extra} spurious), "
-              f"route={state}")
+              f"motions={state}")
     return dict(ok=bool(ok))
 
 

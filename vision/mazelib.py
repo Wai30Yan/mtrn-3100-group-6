@@ -17,6 +17,7 @@
 #  AI (Anthropic Claude), reviewed and tested on real lab-camera photos.
 # =============================================================================
 import json
+import math
 import os
 from collections import namedtuple
 from heapq import heappush, heappop
@@ -915,6 +916,361 @@ def waypoints_to_robot_frame(wps_px, entry, k=K):
         du, dv = (x - ox) * m_per_px, (y - oy) * m_per_px
         out.append((du * fwd[0] + dv * fwd[1], du * left[0] + dv * left[1]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Motion emission (the week-12 robot interface)
+#
+# The firmware consumes `let solution: &[Motion] = ...;` where Motion is
+#   Line  { final_position: Translation2<f32>, final_speed: f32 }   straight
+#   Arc   { final_position: Translation2<f32>, final_speed: f32 }   circular
+#   Pivot { rotation: Rotation2<f32> }                              in place
+# All coordinates ABSOLUTE in the robot's world frame: origin = the robot's
+# power-on pose = the maze start cell centre, +x = start heading, +y = left,
+# angles radians CCW-positive. Rotations are implicit along Line/Arc (robot
+# faces tangent); final_speed is 0.0 at the end / before a Pivot, else the
+# firmware's TRAVEL_SPEED constant. (Interface agreed with the robot side.)
+# ---------------------------------------------------------------------------
+
+CELL_M = CELL_MM / 1000.0
+# Mirrors motion_manager.rs: a Line completes when the reference pose is
+# within LINEAR_TOLERANCE of final_position, so a Line shorter than this
+# completes instantly WITHOUT the robot moving, and a Line whose target is
+# more than this off its heading ray can never complete at all.
+LINEAR_TOLERANCE_M = 0.03
+MIN_LINE_M = 0.04                 # shortest Line worth emitting (> tolerance)
+WALL_HALF_THICK_M = 0.003         # acrylic wall half-thickness (~6 mm total)
+CYLINDER_RADIUS_M = 0.05          # spec 4.2: 100 mm diameter obstacles
+
+_FWD = {N: (0, -1), E: (1, 0), S: (0, 1), W: (-1, 0)}     # (east, south)
+_LEFT = {N: (-1, 0), E: (0, -1), S: (1, 0), W: (0, 1)}
+
+
+def _world_from_maze(du, dv, anchor_dir):
+    """Project a maze-frame offset (metres east, metres south) into the world
+    frame of a pose facing anchor_dir."""
+    f, l = _FWD[anchor_dir], _LEFT[anchor_dir]
+    return (du * f[0] + dv * f[1], du * l[0] + dv * l[1])
+
+
+def cell_to_world(r, c, anchor):
+    """World coordinates (metres) of cell (r, c)'s centre, for a world frame
+    anchored at the centre of anchor = (row, col, dir)."""
+    ar, ac, ad = anchor
+    return _world_from_maze((c - ac) * CELL_M, (r - ar) * CELL_M, ad)
+
+
+def px_to_world(x, y, anchor, k=K):
+    """World coordinates (metres) of a rectified-image pixel."""
+    ar, ac, ad = anchor
+    du = (x / k - (ac + 0.5)) * CELL_M
+    dv = (y / k - (ar + 0.5)) * CELL_M
+    return _world_from_maze(du, dv, ad)
+
+
+def heading_world(d, anchor_dir):
+    """Absolute world-frame angle (radians, CCW-positive, in (-pi, pi]) of
+    compass direction d, for a frame anchored facing anchor_dir. One left
+    turn goes ad -> (ad+3)%4 and is +90 degrees."""
+    deg = (((anchor_dir - d) % 4) * 90.0 + 180.0) % 360.0 - 180.0
+    if deg <= -180.0 + 1e-9:      # keep the documented (-pi, pi]: a reversal
+        deg = 180.0               # is +pi, never -pi
+    return math.radians(deg)
+
+
+def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
+    """Convert a cell path (from solve()) into Line/Arc motions.
+
+    Straight runs become one combined Line; each 90-degree turn becomes an
+    Arc of radius r_turn entered r_turn before the turn-cell centre and
+    exited r_turn after (r_turn = half a cell keeps the robot >= 75 mm from
+    both the inside corner post and the outer walls). Consecutive
+    same-sense arcs with no straight between merge (U-turns become one
+    180-degree Arc). A Pivot is emitted first if the robot's heading
+    (start_heading; None = unknown, always pivot) doesn't match the first
+    leg. Returns [("pivot", theta) | ("line", x, y) | ("arc", x, y)], all in
+    the world frame of `anchor`."""
+    if not 0.0 < r_turn <= CELL_M / 2:
+        raise ValueError(
+            f"turn radius {r_turn} m must be in (0, {CELL_M / 2}] - a larger "
+            f"arc would start behind the previous cell centre")
+    if len(cells) < 2:
+        return []
+    dirs = []
+    for (r0, c0), (r1, c1) in zip(cells, cells[1:]):
+        dirs.append(next(d for d in range(4)
+                         if (r0 + DR[d], c0 + DC[d]) == (r1, c1)))
+    pts = [cell_to_world(r, c, anchor) for r, c in cells]
+    motions = []
+    if start_heading is None or dirs[0] != start_heading:
+        motions.append(("pivot", heading_world(dirs[0], anchor[2])))
+    # runs of constant direction: (dir, index of first pt, index of last pt)
+    runs = []
+    s = 0
+    for i in range(1, len(dirs)):
+        if dirs[i] != dirs[i - 1]:
+            runs.append((dirs[i - 1], s, i))
+            s = i
+    runs.append((dirs[-1], s, len(dirs)))
+
+    def unit(d):
+        a = heading_world(d, anchor[2])
+        return (math.cos(a), math.sin(a))
+
+    pos = pts[0]
+    for j, (d, a, b) in enumerate(runs):
+        u = unit(d)
+        end = pts[b]
+        has_turn = j + 1 < len(runs)
+        if has_turn:
+            end = (end[0] - r_turn * u[0], end[1] - r_turn * u[1])
+        gap = math.hypot(end[0] - pos[0], end[1] - pos[1])
+        if gap > 1e-6:
+            motions.append(("line", end[0], end[1]))
+            pos = end
+        if has_turn:
+            v = unit(runs[j + 1][0])
+            arc_end = (pts[b][0] + r_turn * v[0], pts[b][1] + r_turn * v[1])
+            sense = 1 if runs[j + 1][0] == (d + 3) % 4 else -1
+            # merge with the previous motion if it is a same-sense arc that
+            # ended exactly where this one starts (U-turn)
+            if motions and motions[-1][0] == "arc" and motions[-1][3] == sense \
+                    and math.hypot(pos[0] - motions[-1][1],
+                                   pos[1] - motions[-1][2]) < 1e-6 \
+                    and abs(gap) < 1e-6:
+                motions[-1] = ("arc", arc_end[0], arc_end[1], sense)
+            else:
+                motions.append(("arc", arc_end[0], arc_end[1], sense))
+            pos = arc_end
+    return [m[:3] for m in motions]
+
+
+def course_to_motions(wps_px, anchor, exit_dir=None, entry_cell=None,
+                      exit_cell=None, k=K):
+    """Obstacle-course polyline -> Pivot + Line motions (per the robot side:
+    no arcs in the course).
+
+    Every leg is an explicit Pivot to its absolute bearing followed by a
+    Line: pivots are never skipped, so the robot's heading is pinned exactly
+    (a skipped near-aligned pivot leaves a Line target a few degrees off its
+    heading, which the firmware's Line cannot reach). A final Pivot faces
+    exit_dir so the leg out of the course starts aligned. `entry_cell` and
+    `exit_cell` = (row, col) pin the polyline to those cell centres: the
+    entry centre is where the previous leg left the robot, and ending at the
+    exit centre (rather than at A*'s snapped node, up to ~40 mm off) means
+    the following leg's cell-to-cell geometry starts from a known pose.
+    World frame of `anchor`; sub-2cm hops dropped."""
+    pts = [px_to_world(x, y, anchor, k) for x, y in wps_px]
+    if entry_cell is not None:
+        c0 = cell_to_world(entry_cell[0], entry_cell[1], anchor)
+        if not pts or math.hypot(pts[0][0] - c0[0], pts[0][1] - c0[1]) > 1e-6:
+            pts = [c0] + pts
+    if exit_cell is not None:
+        cN = cell_to_world(exit_cell[0], exit_cell[1], anchor)
+        if not pts or math.hypot(pts[-1][0] - cN[0], pts[-1][1] - cN[1]) > 1e-6:
+            pts = pts + [cN]
+    # Drop hops the firmware cannot drive (a Line shorter than
+    # LINEAR_TOLERANCE completes without moving). The FINAL point is pinned,
+    # so a short residual there is FOLDED INTO the previous leg by retargeting
+    # it - never emitted as its own Pivot/creep/Pivot, which would spend ~200
+    # degrees of in-place rotation to travel a few millimetres.
+    kept = pts[:1]
+    for p in pts[1:]:
+        if math.hypot(p[0] - kept[-1][0], p[1] - kept[-1][1]) >= MIN_LINE_M:
+            kept.append(p)
+    if len(pts) > 1 and math.hypot(kept[-1][0] - pts[-1][0],
+                                   kept[-1][1] - pts[-1][1]) > 1e-9:
+        if len(kept) > 1:
+            kept[-1] = pts[-1]        # retarget the last Line to the exact end
+        else:
+            kept.append(pts[-1])
+    motions = []
+    heading = None
+    for p0, p1 in zip(kept, kept[1:]):
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        if math.hypot(dx, dy) < 1e-6:
+            continue
+        heading = math.atan2(dy, dx)
+        motions.append(("pivot", heading))
+        motions.append(("line", p1[0], p1[1]))
+    if exit_dir is not None:
+        motions.append(("pivot", heading_world(exit_dir, anchor[2])))
+    return motions
+
+
+def format_motions(motions, indent="    "):
+    """Rust literal pastable in place of `let solution: &[Motion] = todo!();`.
+    final_speed: 0.0 on the last motion and before any Pivot, else the
+    firmware's TRAVEL_SPEED constant."""
+    parts = []
+    for i, m in enumerate(motions):
+        stop = i == len(motions) - 1 or motions[i + 1][0] == "pivot"
+        speed = "0.0" if stop else "TRAVEL_SPEED"
+        if m[0] == "pivot":
+            parts.append(f"Motion::Pivot {{ rotation: "
+                         f"Rotation2::new({m[1]:.4f}) }}")
+        elif m[0] == "line":
+            parts.append(f"Motion::Line {{ final_position: "
+                         f"Translation2::new({m[1]:.4f}, {m[2]:.4f}), "
+                         f"final_speed: {speed} }}")
+        else:
+            parts.append(f"Motion::Arc {{ final_position: "
+                         f"Translation2::new({m[1]:.4f}, {m[2]:.4f}), "
+                         f"final_speed: {speed} }}")
+    if not parts:
+        return "&[]"
+    inner = (",\n" + indent).join(parts)
+    return "&[\n" + indent + inner + ",\n]"
+
+
+def simulate_motions(motions, samples_per_m=200):
+    """Geometrically integrate a motion list from the world-frame origin pose
+    (0, 0, heading 0). Returns (sample_points, final_pose). Raises if a Line
+    target is not collinear with the heading at its start - the firmware's
+    Line primitive cannot reach lateral targets."""
+    x, y, th = 0.0, 0.0, 0.0
+    pts = [(x, y)]
+    for m in motions:
+        if m[0] == "pivot":
+            th = m[1]
+            continue
+        tx, ty = m[1], m[2]
+        dx, dy = tx - x, ty - y
+        dist = math.hypot(dx, dy)
+        if dist < 1e-9:
+            continue
+        if m[0] == "line":
+            bearing = math.atan2(dy, dx)
+            off = abs((bearing - th + math.pi) % (2 * math.pi) - math.pi)
+            # The firmware marches its reference pose along the CURRENT
+            # heading and completes only within LINEAR_TOLERANCE of the
+            # target, so reachability is a LATERAL-OFFSET test, not a fixed
+            # angle: dist*sin(off) must stay inside the tolerance (halved
+            # for margin). A fixed 3-degree gate is far too loose on a 1 m
+            # line and needlessly tight on a 0.05 m one.
+            if dist * math.sin(off) > LINEAR_TOLERANCE_M / 2:
+                raise ValueError(
+                    f"Line target ({tx:.3f},{ty:.3f}) is "
+                    f"{dist * math.sin(off) * 1000:.0f} mm off the heading ray "
+                    f"({math.degrees(off):.1f} deg over {dist:.2f} m) - the "
+                    f"firmware's Line would never complete")
+            if dist < LINEAR_TOLERANCE_M:
+                raise ValueError(
+                    f"Line of {dist * 1000:.0f} mm is below the firmware's "
+                    f"{LINEAR_TOLERANCE_M * 1000:.0f} mm tolerance - it would "
+                    f"complete without the robot moving")
+            n = max(2, int(dist * samples_per_m))
+            for t in np.linspace(0, 1, n)[1:]:
+                pts.append((x + dx * t, y + dy * t))
+            x, y, th = tx, ty, bearing
+        else:                                   # arc tangent to heading
+            chord_ang = math.atan2(dy, dx)
+            alpha = (chord_ang - th + math.pi) % (2 * math.pi) - math.pi
+            if abs(alpha) < 1e-6:               # degenerate: straight
+                pts.append((tx, ty))
+                x, y = tx, ty
+                continue
+            r = dist / (2 * math.sin(abs(alpha)))
+            sense = 1 if alpha > 0 else -1
+            ox = x + r * math.cos(th + sense * math.pi / 2)
+            oy = y + r * math.sin(th + sense * math.pi / 2)
+            a0 = math.atan2(y - oy, x - ox)
+            sweep = 2 * alpha
+            n = max(3, int(abs(sweep) * r * samples_per_m))
+            for t in np.linspace(0, 1, n)[1:]:
+                a = a0 + sweep * t
+                pts.append((ox + r * math.cos(a), oy + r * math.sin(a)))
+            x, y = tx, ty
+            th = (th + sweep + math.pi) % (2 * math.pi) - math.pi
+    return pts, (x, y, th)
+
+
+def wall_segments_world(grid, anchor):
+    """Every present wall as a world-frame segment ((x0,y0),(x1,y1)) metres."""
+    segs = []
+    n = grid.n
+    for r in range(n):
+        for c in range(n):
+            for d in range(4):
+                if not grid.has_wall(r, c, d):
+                    continue
+                if d in (S, E) or r == 0 and d == N or c == 0 and d == W:
+                    pass
+                elif d == N and grid.has_wall(r - 1, c, S):
+                    continue                      # already emitted as S
+                elif d == W and grid.has_wall(r, c - 1, E):
+                    continue                      # already emitted as E
+                # corners of the cell in maze coords (east, south) metres
+                half = CELL_M / 2
+                cx, cy = 0.0, 0.0                 # relative to cell centre
+                if d == N:
+                    a, b = (cx - half, cy - half), (cx + half, cy - half)
+                elif d == S:
+                    a, b = (cx - half, cy + half), (cx + half, cy + half)
+                elif d == W:
+                    a, b = (cx - half, cy - half), (cx - half, cy + half)
+                else:
+                    a, b = (cx + half, cy - half), (cx + half, cy + half)
+                base = cell_to_world(r, c, anchor)
+                pa = _world_from_maze(a[0], a[1], anchor[2])
+                pb = _world_from_maze(b[0], b[1], anchor[2])
+                segs.append(((base[0] + pa[0], base[1] + pa[1]),
+                             (base[0] + pb[0], base[1] + pb[1])))
+    return segs
+
+
+def min_wall_clearance(points, segs):
+    """Smallest distance from any sampled path point to any wall segment."""
+    best = float("inf")
+    for px, py in points:
+        for (x0, y0), (x1, y1) in segs:
+            dx, dy = x1 - x0, y1 - y0
+            L2 = dx * dx + dy * dy
+            t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px - x0) * dx +
+                                                       (py - y0) * dy) / L2))
+            d = math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
+            if d < best:
+                best = d
+    return best
+
+
+def check_motions(motions, grid, anchor, goal=None, circles=None,
+                  robot_radius_mm=75.0, margin_mm=5.0):
+    """Simulate the emitted motions and verify they are physically runnable:
+    every Line reachable, the swept robot centre clear of all real obstacles
+    (walls, plus `circles` = (x, y, radius_m) cylinders in world coords), and
+    (if given) the final pose inside the goal cell.
+
+    `grid` must be the PHYSICAL wall map - not one with planning cells
+    block()ed, since blocking synthesises walls that do not exist.
+    Returns (ok, clearance_mm, message)."""
+    try:
+        pts, (fx, fy, _th) = simulate_motions(motions)
+    except ValueError as e:
+        return False, 0.0, str(e)
+    # Walls are modelled as centrelines, so subtract their half-thickness -
+    # the same 6 mm band plan_course inflates, keeping the two models honest.
+    clear_mm = (min_wall_clearance(pts, wall_segments_world(grid, anchor))
+                - WALL_HALF_THICK_M) * 1000.0
+    for cx, cy, rad in (circles or []):
+        # never trust a measured radius smaller than the spec's 100 mm dia:
+        # an eroded blob would otherwise certify a path that clips the cylinder
+        rad = max(rad, CYLINDER_RADIUS_M)
+        for px, py in pts:
+            d = (math.hypot(px - cx, py - cy) - rad) * 1000.0
+            if d < clear_mm:
+                clear_mm = d
+    need = robot_radius_mm + margin_mm
+    if clear_mm < need:
+        return (False, clear_mm,
+                f"path passes {clear_mm:.0f} mm from a wall; the robot needs "
+                f">= {need:.0f} mm (reduce --turn-radius)")
+    if goal is not None:
+        gx, gy = cell_to_world(goal[0], goal[1], anchor)
+        if math.hypot(fx - gx, fy - gy) > CELL_M / 2:
+            return (False, clear_mm,
+                    f"path ends at ({fx:.3f},{fy:.3f}), not in goal cell {goal}")
+    return True, clear_mm, "ok"
 
 
 def waypoints_to_segments(wps_px, entry, exit_dir=None, k=K):

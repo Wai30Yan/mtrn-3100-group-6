@@ -13,18 +13,20 @@
 #  course's last cell. Course interior walls are assumed removed (obstacles
 #  replace them); its outer boundary keeps walls except the entry/exit gaps.
 #
-#  Output: trajectory overlay (the 1-mark demonstrator evidence), a
-#  paste-ready Rust literal of TURN-AND-DRIVE segments (relative pivot in
-#  degrees CCW-positive then drive metres - executable with the firmware's
-#  existing Motion::Pivot + Motion::Line, first pivot relative to the entry
-#  heading, final zero-distance pivot aligns with the exit direction), and
-#  the flr commands for start->entry and exit->goal. The exit gap side is
-#  read from the DETECTED walls, not guessed.
+#  Output: trajectory overlay (the 1-mark demonstrator evidence) and ONE
+#  Rust `&[Motion]` array for the whole run - start -> course entry (Arcs,
+#  as in normal maze navigation) -> through the obstacles (Pivot + Line, per
+#  the robot side) -> exit -> goal. Pastes in place of the todo!() in
+#      let solution: &[Motion] = todo!();      // micromouse-rs/src/main.rs
+#  Absolute world coordinates, metres/radians, origin = the robot's power-on
+#  pose (maze start cell centre, +x = start heading, +y = left). The exit gap
+#  side is read from the DETECTED walls, not guessed.
 #
 #  AI ASSISTANCE (assignment 5.1): written with the assistance of a generative
 #  AI (Anthropic Claude), reviewed and tested on real and synthetic photos.
 # =============================================================================
 import argparse
+import copy
 import os
 import sys
 
@@ -44,8 +46,11 @@ def main():
     ap.add_argument("--entry", required=True,
                     help="row,col,heading-of-travel-into-course e.g. 2,2,E")
     ap.add_argument("--exit", required=True, help="row,col of course exit cell")
-    ap.add_argument("--start", help="maze start row,col,dir (for the full run)")
-    ap.add_argument("--goal", help="maze goal row,col (for the full run)")
+    ap.add_argument("--start", required=True,
+                    help="maze start row,col,dir - also the world-frame origin")
+    ap.add_argument("--goal", required=True, help="maze goal row,col")
+    ap.add_argument("--turn-radius", type=float, default=0.09,
+                    help="Arc radius (m) for turns in the normal-maze legs")
     ap.add_argument("--n", type=int, default=9)
     ap.add_argument("--chamfer", type=int, default=1)
     ap.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270))
@@ -134,7 +139,7 @@ def main():
     if wps_px is None:
         raise SystemExit("NO ROUTE through the obstacle course - check detection")
 
-    segments = ml.waypoints_to_segments(wps_px, entry, exit_dir=exit_dir)
+
 
     # ---- overlay: occupancy + trajectory (the 1-mark evidence) -------------
     vis = warp.copy()
@@ -152,80 +157,96 @@ def main():
         cv2.circle(vis, p, 6, (255, 120, 0), -1)
     cv2.rectangle(vis, (x0, y0), (x0 + size, y0 + size), (255, 0, 255), 2)
 
-    # ---- optional: full-maze legs around the course ------------------------
-    legs = None
-    if args.start and args.goal:
-        start = ml.parse_start(args.start)
-        goal = ml.parse_cell(args.goal)
-        # The course interior is obstacles, not walls: block those cells for
-        # the flr legs so the solver routes to the entry / from the exit.
-        # (exit_dir was read from the DETECTED walls above, before blocking.)
-        for r in range(r0, r0 + args.region_cells):
-            for c in range(c0, c0 + args.region_cells):
-                grid.block(r, c)
-        try:
-            leg1, path1 = ml.solve(grid, start, (pre_r, pre_c))
-        except ValueError as e:
-            raise SystemExit(f"leg 1: {e}")
-        if leg1 is not None:
-            # face the course entry heading at the end of leg 1
-            end = ml.simulate(grid, start, leg1)
-            turns = {0: "", 1: "r", 2: "rr", 3: "l"}[(ed - end[2]) % 4]
-            leg1 += turns + "f"                          # step into the course
+    # ---- full-maze legs either side of the course --------------------------
+    start = ml.parse_start(args.start)
+    goal = ml.parse_cell(args.goal)
+    # Snapshot the PHYSICAL wall map before blocking: block() synthesises
+    # walls around the course cells that do not exist in reality, and the
+    # clearance check must run against what is really there.
+    phys_grid = copy.deepcopy(grid)
+    # Inside the course the obstacles REPLACE the interior walls (spec 4.2),
+    # so any interior wall the detector reported there is a cylinder or a
+    # shadow misread as a wall - it is already modelled as a circle. Keeping
+    # it would fail the clearance check against a wall that isn't there.
+    for r in range(r0, r0 + rc):
+        for c in range(c0, c0 + rc):
+            for d in (ml.S, ml.E):
+                r2, c2 = r + ml.DR[d], c + ml.DC[d]
+                if r0 <= r2 < r0 + rc and c0 <= c2 < c0 + rc:
+                    phys_grid.remove_wall(r, c, d)
+    # ... and the entry/exit gaps are open in reality too.
+    phys_grid.remove_wall(er, ec, ml.OPP[ed])
+    phys_grid.remove_wall(xr, xc, exit_dir)
+    # The course interior is obstacles, not walls: block those cells so the
+    # grid solver routes to the entry / from the exit. (exit_dir was read
+    # from the DETECTED walls above, before this blocking.)
+    for r in range(r0, r0 + args.region_cells):
+        for c in range(c0, c0 + args.region_cells):
+            grid.block(r, c)
+    try:
+        leg1, path1 = ml.solve(grid, start, (pre_r, pre_c))
         out_r, out_c = xr + ml.DR[exit_dir], xc + ml.DC[exit_dir]
-        try:
-            leg2, path2 = ml.solve(grid, (out_r, out_c, exit_dir), goal)
-        except ValueError as e:
-            raise SystemExit(f"leg 2: {e}")
-        if leg2 is not None:
-            leg2 = "f" + leg2                            # step out of the course
-        legs = (leg1, leg2)
-        for path in (path1, path2 if leg2 else None):
-            if path:
-                p = [(c * ml.K + ml.K // 2, r * ml.K + ml.K // 2) for r, c in path]
-                for a, b in zip(p, p[1:]):
-                    cv2.line(vis, a, b, (200, 160, 0), 3)
+        leg2, path2 = ml.solve(grid, (out_r, out_c, exit_dir), goal)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    failed = ([] if leg1 is not None else ["leg 1 (start -> course entry)"]) + \
+             ([] if leg2 is not None else ["leg 2 (course exit -> goal)"])
+    if failed:
+        ml.write_image(args.out or "course_FAILED.png", vis)
+        raise SystemExit("NO PATH for " + " and ".join(failed)
+                         + " - check the wall overlay")
+    for path in (path1, path2):
+        p = [(c * ml.K + ml.K // 2, r * ml.K + ml.K // 2) for r, c in path]
+        for a, b in zip(p, p[1:]):
+            cv2.line(vis, a, b, (200, 160, 0), 3)
 
     out = args.out or (os.path.splitext(image_path)[0] + "_course_overlay.png")
     ml.write_image(out, vis)
     print(f"# overlay: {out}", file=sys.stderr)
 
-    # ---- outputs -----------------------------------------------------------
-    print("// obstacle course, turn-and-drive segments for the robot:")
-    print("// each entry = (pivot degrees, CCW/left positive - matches "
-          "Rotation2), then drive metres.")
-    print("// executes with the existing Motion::Pivot + Motion::Line; first "
-          "pivot is relative to")
-    print(f"// the heading entering the course ({ml.DIR_NAMES[ed]}); the final "
-          f"0.0 m pivot leaves the robot")
-    print(f"// facing {ml.DIR_NAMES[exit_dir]}, ready for the exit->goal "
-          f"commands below.")
-    body = ", ".join(f"({t:.1f}, {d:.3f})" for t, d in segments)
-    print(f"const COURSE: &[(f32, f32)] = &[{body}];")
-    wps_robot = ml.waypoints_to_robot_frame(wps_px, entry)
-    print("// (waypoints in the entry frame, for reference: "
-          + " ".join(f"({x:.2f},{y:.2f})" for x, y in wps_robot) + ")")
-    failed = []
-    if legs:
-        leg1, leg2 = legs
-        print(f'// start -> course entry (ends inside entry cell, facing '
-              f'{ml.DIR_NAMES[ed]}):')
-        print(f'//   "{leg1}"' if leg1 else "//   NO PATH")
-        print(f'// course exit -> goal (the robot faces '
-              f'{ml.DIR_NAMES[exit_dir]} after the final COURSE pivot):')
-        print(f'//   "{leg2}"' if leg2 else "//   NO PATH")
-        if leg1 is None:
-            failed.append("leg 1 (start -> entry)")
-        if leg2 is None:
-            failed.append("leg 2 (exit -> goal)")
+    # ---- one Motion array for the whole run --------------------------------
+    # leg 1: normal maze navigation (Arcs), ending inside the entry cell
+    # facing ed; path1 stops one cell short, so append the entry cell.
+    try:
+        motions = ml.path_to_motions(list(path1) + [(er, ec)], anchor=start,
+                                     start_heading=start[2],
+                                     r_turn=args.turn_radius)
+        # course: Pivot + Line only, already in the same world frame
+        motions += ml.course_to_motions(wps_px, anchor=start,
+                                        exit_dir=exit_dir,
+                                        entry_cell=(er, ec),
+                                        exit_cell=(xr, xc))
+        # leg 2: out of the exit cell and on to the goal, facing exit_dir
+        motions += ml.path_to_motions([(xr, xc)] + list(path2), anchor=start,
+                                      start_heading=exit_dir,
+                                      r_turn=args.turn_radius)
+    except ValueError as e:
+        raise SystemExit(str(e))
+
+    circles = [(*ml.px_to_world(c.cx, c.cy, start),
+                c.r * ml.CELL_MM / ml.K / 1000.0) for c in cylinders]
+    ok, clearance, msg = ml.check_motions(motions, phys_grid, start, goal,
+                                          circles=circles)
+    # Abort BEFORE printing: a rejected array must never end up on the
+    # clipboard just because the failure was on the line after it.
+    if not ok:
+        raise SystemExit(f"UNRUNNABLE PATH: {msg}")
+
+    print("// paste in place of the todo!() in "
+          "micromouse-rs/src/main.rs: let solution: &[Motion] = ...")
+    print(f"// absolute world coords (m, rad); origin = power-on pose at "
+          f"start cell {start[:2]} facing {ml.DIR_NAMES[start[2]]}, "
+          f"+x = that heading, +y = left")
+    print(f"// start -> course entry {(er, ec)} (Arcs) -> {len(cylinders)} "
+          f"obstacles (Pivot+Line) -> exit {(xr, xc)} facing "
+          f"{ml.DIR_NAMES[exit_dir]} -> goal {goal}")
+    print(f"// {len(motions)} motions; min wall clearance {clearance:.0f} mm")
+    print(ml.format_motions(motions))
 
     if not args.no_ui:
         cv2.imshow("course - any key to close", vis)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-    if failed:
-        raise SystemExit("NO PATH for " + " and ".join(failed)
-                         + " - check the wall overlay")
 
 
 if __name__ == "__main__":

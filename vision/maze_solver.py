@@ -3,8 +3,16 @@
 #  MTRN3100 Micromouse - 4.1.1 Path Generation (2%, gates 4.1.2's 8%).
 #
 #  Photo of the maze (file or live overhead-camera capture) -> wall map ->
-#  shortest path -> 'flr' command string for the robot + overlay image proving
-#  the solution is image-derived.
+#  shortest path -> a Rust `&[Motion]` array for the robot + overlay image
+#  proving the solution is image-derived.
+#
+#  Output pastes in place of the todo!() in:
+#      let solution: &[Motion] = todo!();      // micromouse-rs/src/main.rs
+#  Absolute world coordinates, metres/radians, origin = the robot's power-on
+#  pose (start cell centre, +x = start heading, +y = left). Turns are emitted
+#  as Motion::Arc (faster and more precise than pivoting, per the robot side);
+#  straight runs and same-sense arc pairs are combined. The emitted path is
+#  simulated and clearance-checked against the detected walls before printing.
 #
 #  Demo-day usage (Ed #131: plug the laptop into the demo-desk USB camera):
 #      python maze_solver.py --capture 0 --start 4,0,E --goal 4,8
@@ -62,6 +70,12 @@ def main():
     ap.add_argument("--corners", default="cache", choices=("cache", "auto", "click"),
                     help="corner source (cache -> auto -> click fallback)")
     ap.add_argument("--turn-cost", type=float, default=1.0)
+    ap.add_argument("--turn-radius", type=float, default=0.09,
+                    help="Arc radius in metres for 90-deg turns (default 0.09 "
+                         "= half a cell); the emitted path is clearance-checked")
+    ap.add_argument("--flr", action="store_true",
+                    help="also print the legacy 'flr' string (week-8 demo "
+                         "interface, not used for week 12)")
     ap.add_argument("--no-ui", action="store_true",
                     help="headless: no windows, skip interactive review")
     ap.add_argument("--out", default=None, help="overlay output path")
@@ -112,20 +126,43 @@ def main():
         ml.write_image(fail, overlay)
         raise SystemExit(f"NO PATH FOUND - check walls in {fail}")
 
-    # Self-check: replay the commands on the detected wall map.
+    # Self-check 1: replay the grid commands on the detected wall map.
     end = ml.simulate(grid, start, commands)
     assert end[:2] == goal, f"simulation ended at {end}, expected {goal}"
+
+    # Build the robot motions; world frame is anchored on the start pose.
+    try:
+        motions = ml.path_to_motions(path, anchor=start, start_heading=start[2],
+                                     r_turn=args.turn_radius)
+    except ValueError as e:
+        raise SystemExit(str(e))
+
+    # Self-check 2: the motions themselves must be runnable - every Line
+    # reachable by the firmware, the swept path clear of the detected walls,
+    # and the final pose inside the goal cell.
+    ok, clearance, msg = ml.check_motions(motions, grid, start, goal)
 
     overlay = ml.render_overlay(warp, grid, scores, path, start, goal)
     out = args.out or (os.path.splitext(image_path)[0] + "_overlay.png")
     ml.write_image(out, overlay)
+    # Abort BEFORE printing: a rejected array must never end up on the
+    # clipboard just because the failure was on the line after it.
+    if not ok:
+        print(f"# overlay: {out}", file=sys.stderr)
+        raise SystemExit(f"UNRUNNABLE PATH: {msg}")
 
-    print(commands)
-    print(f"# {len(commands)} actions ({commands.count('f')} cells), "
-          f"validated by simulation", file=sys.stderr)
+    print("// paste in place of the todo!() in "
+          "micromouse-rs/src/main.rs: let solution: &[Motion] = ...")
+    print(f"// absolute world coords (m, rad); origin = power-on pose at "
+          f"start cell {start[:2]} facing {ml.DIR_NAMES[start[2]]}, "
+          f"+x = that heading, +y = left")
+    print(f"// {len(motions)} motions, {commands.count('f')} cells; "
+          f"min wall clearance {clearance:.0f} mm")
+    print(ml.format_motions(motions))
+    if args.flr:
+        print(f'// legacy week-8 string: "{commands}"')
+
     print(f"# overlay: {out}", file=sys.stderr)
-    print(f'# paste into micromouse-rs/src/main.rs:\n'
-          f'#   let task = Task::ChainingMovements("{commands}");', file=sys.stderr)
 
     if not args.no_ui:
         cv2.imshow("result - any key to close", overlay)

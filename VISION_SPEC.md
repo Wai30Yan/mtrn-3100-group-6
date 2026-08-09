@@ -13,7 +13,7 @@ staff answers on EdStem (thread numbers cited as #N below).
 | §4.1.1 | Path Generation | **2%** | Entirely yours: photo of maze → command string. |
 | §4.1.2 | Maze Completion | 8% | Robot-side, but **gated on 4.1.1** — "if your program fails to execute or output a path, you will not be able to attempt 4.1.2". |
 | §4.2 | Continuous Planning | **5%** | Yours: occupancy map from image + solved trajectory image (1 mark). Robot following it (2+2 marks) is joint — your waypoints, their follower. |
-| §4.3 | Autonomous Mapping | 5% | Robot-side exploration (Rust). But it requires a **live on-screen map visualisation with % completion** — that laptop-side viewer is naturally yours. |
+| §4.3 | Autonomous Mapping | 5% | **Not mine.** Onboard exploration + display, owned by Waiyan (`micromouse-rs/src/map.rs` on `rust-lidar`: `Direction`, `MazeMap`, BFS). The robot is not tethered to the laptop. |
 
 Your code directly earns ~3 marks and gates ~12 of the 20.
 
@@ -22,7 +22,7 @@ Hard rules from the PDF that shape the design:
 - §1.1: off-board processing is only allowed for "computer vision for path generation" — your Python runs on the laptop; everything else runs on the robot.
 - §4.1.1: demonstrated **live**. You must show the image input and the output ("to verify that your solution is not hard-coded"). **No tuning values after taking the image** — you photograph, immediately execute, and paste the output into the robot source in front of the demonstrator.
 - §1.2: maze representation is free choice but must be autonomously generated from your CV solution. Start is `(row, col, direction)`, goal is `(row, col)`, zero-indexed, row 0 = north (top). Cells are 180 mm × 180 mm, walls 150 mm tall.
-- §3.4 / §4.1.1 command format: `f` = forward one cell, `l` = 90° CCW, `r` = 90° CW (e.g. `"lfrfflfr"`). The Rust firmware **already executes exactly this** (`Task::ChainingMovements("flfrrflr")` in `micromouse-rs/src/main.rs`), so the 4.1 handoff already works: run script → copy string → paste into `main.rs` → flash.
+- §3.4's `flr` command format (`f` = forward one cell, `l` = 90° CCW, `r` = 90° CW) was the **week-8 demo interface only**. Week 12 uses the `&[Motion]` array in §4 below; the solver still works in `flr` internally because it is the natural grid representation, and `--flr` prints it for eyeballing.
 - §4.2: obstacles are 100 mm ⌀ cylinders, wall height, randomly placed in a 5×5-cell region; region location **may be hardcoded**; only one entrance and one exit. Transfer format to the robot is free — spec suggests "waypoints relative to each other".
 - §5.1: AI-assisted code must be labelled (file header + inline comments). Staff confirmed AI use is fine — "go nuts, just make sure you actually do irl testing" (#93).
 
@@ -76,58 +76,81 @@ One folder in the repo:
 
 ```
 vision/
-  maze_solver.py       §4.1.1  photo → command string + overlay image
-  obstacle_planner.py  §4.2    photo → occupancy map, waypoints + trajectory image
-  map_viewer.py        §4.3    USB serial → live map display with % completion
-  mazelib.py           shared: rectify, corner picker, wall/obstacle detection, grid+solver
-  requirements.txt     numpy, opencv-python, pyserial
-  test_images/         real photos from the lab cameras + synthetic test set
-  tests/               ground-truth evaluation harness
+  maze_solver.py       §4.1.1  photo → &[Motion] array + overlay image
+  obstacle_planner.py  §4.2    photo → occupancy map, &[Motion] array + overlay
+  mazelib.py           shared: rectify, corner picker, wall/obstacle detection,
+                       grid+solver, Motion emission, geometric verifier
+  requirements.txt     numpy, opencv-python
+  test_images/         real photos from the lab cameras
+  tests/               synthetic-photo generator + ground-truth eval harness
 ```
+
+**Reviewing this without reading it all** (fair complaint — it is ~1700 lines):
+the contract that matters is the emitted `&[Motion]` array, and
+`tests/eval.py` is the thing that checks it. Run
+`./.venv/bin/python tests/eval.py`: it generates mazes with known walls,
+runs the whole pipeline, and — the part worth trusting — *geometrically
+simulates every emitted Motion array* and asserts each `Line` is reachable
+from its start heading, the swept path clears every real wall and cylinder by
+the robot radius, and the final pose lands in the goal cell. If that passes,
+the arrays are runnable regardless of how the pixels got there. The detection
+internals only need review if the overlay ever looks wrong.
 
 (The old scaffold in OneDrive is superseded by this — it assumed the wrong wall
 polarity and a handheld camera.)
 
 ## 4. Interface contracts with the robot (agree with teammate)
 
-**4.1 — command string (already settled).** Output is a plain `flr` string.
-Robot: paste into `Task::ChainingMovements("…")`, flash. Nothing to build.
-
-**4.2 — turn-and-drive segments (proposal, needs teammate sign-off).** The
-script prints a paste-ready Rust literal of **(relative pivot in degrees,
-CCW/left-positive; then drive distance in metres)** pairs:
+**The interface (agreed with the robot side).** Both tools print a Rust
+`&[Motion]` literal that pastes in place of the `todo!()` in
+`let solution: &[Motion] = todo!();`, using the revised `Motion` enum:
 
 ```rust
-const COURSE: &[(f32, f32)] = &[(38.1, 0.160), (-9.2, 0.555), (2.0, 0.000)];
+enum Motion {
+  Line  { final_position: Translation2<f32>, final_speed: f32 },  // straight
+  Arc   { final_position: Translation2<f32>, final_speed: f32 },  // circular
+  Pivot { rotation: Rotation2<f32> },                             // in place
+}
 ```
 
-This format was chosen after auditing `motion_manager.rs`: the firmware has
-**no primitive that can chase a lateral waypoint** (`Motion::Line` only
-terminates on targets collinear with the current heading; `Motion::Pose`
-stalls on pure-lateral error; `Motion::Arc` is `todo!()`). Turn-and-drive
-needs only the primitives that already work: each pair is one
-`Motion::Pivot { rotation: pose.rotation * Rotation2::new(deg.to_radians()) }`
-followed by one `Motion::Line` 'f'-style target `dist` ahead — a ~10-line
-sequencer in `main.rs`, identical in shape to `ChainingMovements`.
+The `Task` string interface was **demo-only** and is no longer the week-12
+path (`maze_solver.py --flr` still prints it, for eyeballing only).
 
-Conventions: the first pivot is relative to the robot's heading as it enters
-the course (leg 1 below ends with the robot inside the entry cell facing that
-heading); angles are CCW-positive, matching `Rotation2`; the final
-zero-distance pivot leaves the robot **facing the exit direction**, so the
-exit→goal `flr` string runs with no hand-derived turn. The full §4.2 run:
-`flr` leg to the course entrance → COURSE segments → `flr` leg from exit to
-goal; the script prints all three blocks together, and reads the exit-gap
-side from the detected walls (never guessed).
+Conventions the emitters follow:
 
-**4.3 — telemetry line (proposal).** Robot already prints over USB CDC. One line
-per map update:
+- **Absolute coordinates**, metres and radians, in the robot's world frame:
+  origin = the power-on pose = the **maze start cell centre**, +x = the start
+  heading, +y = left, angles CCW-positive (matching `Rotation2`). This
+  matches `StateObserver`, which zero-initialises at power-on.
+  *If the robot's world frame is anchored differently, this is the one
+  assumption to correct — everything else follows from it.*
+- **Rotation is implicit** along `Line`/`Arc` (robot ends tangent to motion);
+  `Pivot` is emitted only where the robot must turn on the spot.
+- **`Arc` for normal maze navigation** (faster and more precise): each 90°
+  turn is a quarter-circle of radius `--turn-radius` (default 0.09 m = half a
+  cell), entered and exited that far from the turn cell's centre.
+- **`Line` + `Pivot` only inside the obstacle course.**
+- **Runs are combined**: consecutive straights become one `Line`, and
+  consecutive same-sense arcs with no straight between become one `Arc`
+  (a U-turn is a single 180° `Arc`).
+- **`final_speed`** is `0.0` on the last motion and on any motion immediately
+  before a `Pivot`, else `TRAVEL_SPEED`.
 
-```
-MAP,<row>,<col>,<wall_bitmask NESW>,<visited_pct>
-```
+Every emitted array is **geometrically simulated before printing**: each
+`Line` must be reachable along the heading it starts from, the swept path
+must clear all detected walls and cylinders by ≥ 80 mm (75 mm robot radius +
+margin), and the final pose must land in the goal cell. The tool exits
+non-zero and says why if not — so a pasted array has already been checked
+against the photo it came from.
 
-`map_viewer.py` reads the port with pyserial, redraws the grid (visited cells
-shaded, walls drawn), title shows `<visited_pct>%`. OpenCV window, ~50 lines.
+Two things I need from you to finish this:
+
+1. **`TRAVEL_SPEED`** — the emitted arrays reference it by name; tell me the
+   value/const you settle on (or I'll inline a number).
+2. **Confirm the world-frame origin** above, and whether `Motion::Arc`'s
+   implicit geometry is "circle tangent to the current heading through
+   `final_position`" — that's what I assumed, and it's what makes the arc
+   unique given the enum has no radius/centre field.
 
 ## 5. Pipeline design
 
@@ -170,8 +193,9 @@ python maze_solver.py --capture 0 --start 0,0,S --goal 4,7       # from lab came
    (90°). Minimises actions (#144-sanctioned) which minimises run time. The
    commands are replayed on the detected map (`simulate`) before printing —
    the tool cannot output a path that crosses its own detected walls.
-6. **Emit.** Print the command string; save + display `*_overlay.png` with
-   walls + path + start/goal → demonstrator evidence.
+6. **Emit.** Convert the cell path to `Line`/`Arc` motions (see §4), simulate
+   and clearance-check them, print the Rust array; save + display
+   `*_overlay.png` with walls + path + start/goal → demonstrator evidence.
 
 ### 5.2 obstacle_planner.py (§4.2)
 
@@ -195,14 +219,13 @@ python obstacle_planner.py photo.jpg --region 2,2 --entry 4,2,E --exit 4,6 \
 4. **Plan** entry→exit with A* (8-connected, corner-cutting forbidden),
    snapping a blocked entry/exit centre to the nearest free node in its cell,
    then line-of-sight shortcut to sparse waypoints.
-5. **Emit.** Trajectory overlay (the 1-mark evidence) + Rust waypoint literal
-   (§4 contract) + the `flr` legs start→entry and exit→goal, including the
-   turn stitching into the course and the exit heading the robot must face.
+5. **Emit.** Trajectory overlay (the 1-mark evidence) + **one** `&[Motion]`
+   array for the whole run: start → course entry (Arcs) → through the
+   obstacles (Pivot + Line) → exit → goal (Arcs). The course polyline is
+   pinned to the entry and exit cell centres so the legs join at known
+   poses, and the exit-gap side is read from the **detected** walls.
 
-### 5.3 map_viewer.py (§4.3)
-
-pyserial read loop → parse `MAP,` lines → redraw grid in an OpenCV window with
-% completion. Robot logic is teammate's.
+*(§4.3 autonomous mapping is Waiyan's onboard `map.rs` — no laptop tool.)*
 
 ## 6. Demo-day flow (rehearse end-to-end in week 11)
 
@@ -226,6 +249,9 @@ Current results (all green):
 
 - **Solver property test**: 60/60 random mazes — emitted commands replayed on
   the wall map reach the goal without crossing walls.
+- **Motion-array test**: 360/360 emitted `&[Motion]` arrays geometrically
+  simulated — every `Line` reachable from its start heading, every swept path
+  ≥ 80 mm clear of the *true* walls, every final pose in the goal cell.
 - **Synthetic photo test**: 30/30 rendered 9×9 "photos" (white mottled floor,
   dark leaning walls, specular streaks, cyan clips, lone post clips, floor
   seam, frame + frame seam, chamfers with coloured plates, random perspective
