@@ -124,7 +124,17 @@ def main():
         overlay = ml.render_overlay(warp, grid, scores, None, start, goal)
         fail = args.out or "overlay_FAILED.png"
         ml.write_image(fail, overlay)
-        raise SystemExit(f"NO PATH FOUND - check walls in {fail}")
+        # Say WHY: usually one of the two cells sits in a pocket the detected
+        # walls seal off, which the overlay then makes obvious.
+        reach = ml.reachable_from(grid, start[:2])
+        where = ("the start and goal are in separate regions of the detected "
+                 "maze" if goal not in reach else "unknown")
+        raise SystemExit(
+            f"NO PATH FOUND - {where}.\n"
+            f"  start {start[:2]} can reach {len(reach)} cells; "
+            f"goal {goal} is {'NOT ' if goal not in reach else ''}among them.\n"
+            f"  Check the walls around both cells in {fail} - if one is wrong, "
+            f"rerun without --no-ui and click that edge to toggle it.")
 
     # Self-check 1: replay the grid commands on the detected wall map.
     end = ml.simulate(grid, start, commands)

@@ -521,6 +521,21 @@ def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055):
 # Solver: Dijkstra over (row, col, heading)
 # ---------------------------------------------------------------------------
 
+def reachable_from(grid, cell):
+    """Set of cells reachable from `cell` through the detected walls. Used to
+    explain a NO PATH result (a sealed pocket vs a genuinely blocked maze)."""
+    from collections import deque
+    seen = {tuple(cell)}
+    q = deque([tuple(cell)])
+    while q:
+        r, c = q.popleft()
+        for _d, r2, c2 in grid.open_neighbours(r, c):
+            if (r2, c2) not in seen:
+                seen.add((r2, c2))
+                q.append((r2, c2))
+    return seen
+
+
 def solve(grid, start, goal, turn_cost=1.0):
     """start = (r, c, dir), goal = (r, c). Minimises actions: 1 per forward,
     turn_cost per 90-degree pivot (Ed #144: fewest actions is an accepted

@@ -70,6 +70,41 @@ Hard rules from the PDF that shape the design:
 - **Libraries are unrestricted** provided they're in `requirements.txt` (#147).
 - Walls are "infinitely high" — no crossing them (#101).
 
+### Confirmed in the second EdStem sweep (as of 9 Aug 2026)
+
+- **§4.2 obstacle course has NO interior walls** (#270, 8 Aug): "no walls in
+  it, just the 5x5 space with obstacles inside." The run is
+  `start → standard maze → obstacle course → standard maze → goal`, exactly
+  what `obstacle_planner.py` emits. Staff also confirmed the region location
+  and similar constants **may be edited in code on the day** — the
+  no-tuning rule is specifically about CV parameters, "as it takes too long
+  while marking".
+- **Obstacles are placed at random, not on the posts** (#204): "you will not
+  be able to do a standard maze Cartesian path through it" — continuous
+  planning genuinely required, which is what the A* + shortcut does.
+- **The floor gap runs down the CENTRE of a cell** (#249, 6 Aug). Another
+  team hit exactly the failure I designed against — their processing reads
+  it as a wall. Staff: "Because the line is in the centre of a cell, your
+  method shouldn't be picking it up." Verified on our rectified photo: the
+  seam sits at x=449 px, i.e. 49 px from the nearest cell boundary, while
+  wall sampling only reads boundaries (x=100,200,…) with ±6–33 px strips —
+  structurally immune, no threshold tuning involved. Tape may still be added.
+- **§4.3 needs the robot's OLED** (#224): no screen output → no marks, since
+  the marker can't tell mapping from random motion. Confirms 4.3 is fully
+  onboard (Waiyan) and that a laptop viewer would have earned nothing.
+- **Speed marks use the ceiling** (#213): with 11 finishers, the top 2 get
+  full marks.
+- **Extra lab time**: demonstrators will stay until 6pm during week-11 open
+  labs *if* the myExperience response rate hits 60% (#237). Worth filling in.
+- Maze wall sections and posts have gone missing from the lab (#219) — the
+  arena may be short of parts when you test.
+
+**Still unanswered** (asked by another student under #270, no staff reply
+yet): the maximum number of obstacles, and the minimum gap between them.
+Our planner already degrades gracefully — it retries with a smaller safety
+margin and reports when it had to — but if staff answer, check the tightest
+gap is still ≥ ~190 mm centre-to-centre or the robot physically cannot fit.
+
 ## 3. Deliverables
 
 One folder in the repo:
