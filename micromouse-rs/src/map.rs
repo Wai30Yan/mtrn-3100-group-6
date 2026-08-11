@@ -114,10 +114,14 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
 
     pub fn set_wall(&mut self, pos: Pos, dir: Direction) {
         let (x, y) = (pos.0 as usize, pos.1 as usize);
+
+        // bitwise OR to set  the wall bit for (x, y)
         self.walls[x][y] |= dir.to_wall();
 
         if let Some(neighbor) = self.neighbor_in_dir(pos, dir) {
             let (nx, ny) = (neighbor.0 as usize, neighbor.1 as usize);
+
+            // mirror the wall on neighbor's opposite side
             self.walls[nx][ny] |= dir.opposite().to_wall();
         }
     }
@@ -185,7 +189,36 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
     
         path.reverse();
         Some(path)
-    
+    }
+
+    pub fn update_from_lidars(
+        &mut self, 
+        current_pos: Pos, 
+        heading: Direction, 
+        left_dist: Option<f32>, 
+        right_dist: Option<f32>, 
+        front_dist: Option<f32>,
+        wall_threshold_m: f32,
+    ) {
+        self.mark_visited(current_pos);
+
+        if let Some(dist) = front_dist {
+            if dist < wall_threshold_m {
+                self.set_wall(current_pos, heading);
+            }
+        }
+
+        if let Some(dist) = left_dist {
+            if dist < wall_threshold_m {
+                self.set_wall(current_pos, heading.turn_left);
+            }
+        }
+
+        if let Some(dist) = right_dist {
+            if dist < wall_threshold_m {
+                self.set_wall(current_pos, heading.turn_right);
+            }
+        }
     }
 }
 
