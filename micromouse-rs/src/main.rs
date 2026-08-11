@@ -308,12 +308,15 @@ fn main() -> ! {
         block!(period_timer.wait()).unwrap();
     }
 
-    let task = Task::ChainingMovements("flfrrflr");
+    // let task = Task::ChainingMovements("lffrflfr");
+    let task = Task::StraightLineTracking;
+
+    let solution: &[Task] = &[Task::StraightLineTracking];
 
     match task {
         Task::StraightLineTracking => {
             motion_manager.set_target(Motion::Line {
-                final_position: Translation2::new(1.05, 0.0),
+                final_position: Translation2::new(1.0, 0.0),
                 final_speed: 0.0,
             });
         }
@@ -323,6 +326,7 @@ fn main() -> ! {
     }
 
     let mut motion_index: usize = 0;
+    let mut target: Vector2<f32> = Vector2::new(0.10, 0.0);
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -353,13 +357,13 @@ fn main() -> ! {
         match task {
             Task::StraightLineTracking => {}
             Task::DrivingAndStopping => {
+                target = target * 0.95
+                    + (observer.pose().translation.vector
+                        + Vector2::new(lidar_f.distance().unwrap_or(0.20) - 0.10, 0.0))
+                        * 0.05;
                 // Relative to wall
                 motion_manager.set_target(Motion::Pose {
-                    pose: Isometry2::new(
-                        observer.pose().translation.vector
-                            + Vector2::new(lidar_f.distance().unwrap_or(0.20) - 0.10, 0.0),
-                        0.0,
-                    ),
+                    pose: Isometry2::new(target, 0.0),
                 });
             }
             Task::Turning => {
@@ -383,11 +387,9 @@ fn main() -> ! {
                                 * Rotation2::new(-f32::consts::FRAC_PI_2))
                             .into(),
                         },
-                        'f' => Motion::Line {
-                            final_position: (motion_manager.pose()
-                                * Isometry2::new(Vector2::new(0.18, 0.0), 0.0))
-                            .translation,
-                            final_speed: 0.0,
+                        'f' => Motion::Pose {
+                            pose: (motion_manager.pose()
+                                * Isometry2::new(Vector2::new(0.175, 0.0), 0.0)),
                         },
                         _ => {
                             unimplemented!("Invalid command")

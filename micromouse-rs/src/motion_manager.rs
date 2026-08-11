@@ -46,7 +46,7 @@ pub struct MotionManager {
     current_speed: f32,
 }
 
-const BASIC_ANGULAR_GAIN: f32 = 20.0;
+const BASIC_ANGULAR_GAIN: f32 = 50.0;
 const BASIC_LINEAR_GAIN: f32 = 10.0;
 
 const MAX_VELOCITY: f32 = 0.20;

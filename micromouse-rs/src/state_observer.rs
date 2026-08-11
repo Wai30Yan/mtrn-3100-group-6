@@ -87,7 +87,7 @@ impl StateObserver {
             0.0,
             imu.ax(),
             imu.ay(),
-            imu.gz(),
+            imu.gz() * 1.68,
         ]);
 
         self.prev_left = encoder_left.position();
