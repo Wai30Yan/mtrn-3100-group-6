@@ -2,7 +2,7 @@ use core::matches;
 
 use crate::na::ComplexField;
 use crate::{DT, state_observer};
-use na::{Isometry, Isometry2, Rotation2, Translation2, UnitComplex};
+use na::{Isometry2, Rotation2, Translation2, UnitComplex};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub enum Motion {
@@ -48,14 +48,14 @@ pub struct MotionManager {
 
 const BASIC_ANGULAR_GAIN: f32 = 50.0;
 const BASIC_LINEAR_GAIN: f32 = 10.0;
+const BASIC_CROSS_GAIN: f32 = 20.0;
 
 const MAX_VELOCITY: f32 = 0.20;
 const MAX_ACCELERATION: f32 = 0.10;
-const MAX_ANGULAR: f32 = 2.0;
+const MAX_ANGULAR: f32 = 1.5;
 const OVERSHOOT_GAIN: f32 = 0.2;
 
 const EPSILON: f32 = 0.005;
-const ARC_EPSILON: f32 = 0.02;
 
 impl MotionManager {
     pub fn update(&mut self, observed_pose: Isometry2<f32>) -> ChassisSpeeds {
@@ -93,28 +93,29 @@ impl MotionManager {
                 final_pose,
                 final_speed,
             } => {
-                let path_delta = final_pose / self.current_pose;
+                let path_delta = final_pose.translation / self.current_pose.translation;
+                let rot_delta = final_pose.rotation / self.current_pose.rotation;
                 let mut turn_rate = 0.0;
 
-                if path_delta.translation.vector.norm() <= ARC_EPSILON {
+                if path_delta.vector.norm() <= EPSILON {
                     self.current_pose = final_pose;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
                 } else {
                     // Obtain the radius of rotation via the cord length
-                    let rad = path_delta.translation.vector.norm()
-                        / (2.0 * f32::sin(path_delta.rotation.angle().abs() / 2.0));
+                    let rad =
+                        path_delta.vector.norm() / (2.0 * f32::sin(rot_delta.angle().abs() / 2.0));
 
                     // Drive forward
                     self.current_speed = Self::update_speed(
                         self.current_speed,
                         final_speed,
-                        rad * path_delta.rotation.angle().abs(),
+                        rad * rot_delta.angle().abs(),
                     );
                     self.current_pose *= Translation2::new(self.current_speed * DT, 0.0);
 
                     // Turn
-                    turn_rate = (self.current_speed / rad).copysign(path_delta.rotation.angle());
+                    turn_rate = (self.current_speed / rad).copysign(rot_delta.angle());
                     self.current_pose
                         .append_rotation_wrt_center_mut(&UnitComplex::new(turn_rate * DT));
                 }
@@ -188,8 +189,8 @@ impl MotionManager {
                 + (BASIC_LINEAR_GAIN * error.translation.x).clamp_magnitude(MAX_VELOCITY * 0.2),
             omega: desired_speeds.omega
                 + (BASIC_ANGULAR_GAIN * error.rotation.angle()
-                    + BASIC_LINEAR_GAIN * error.translation.y)
-                    .clamp_magnitude(MAX_ANGULAR * 0.2),
+                    + BASIC_CROSS_GAIN * error.translation.y)
+                    .clamp_magnitude(MAX_ANGULAR * 0.3),
         }
     }
 }

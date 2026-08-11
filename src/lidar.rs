@@ -154,7 +154,7 @@ impl<'a> Lidar<'a> {
         lidar.address = address;
 
         // update ptp_offset
-        lidar.ptp_offset = lidar.read_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET) as u8;
+        lidar.ptp_offset = lidar.read_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET);
         lidar.configure_default();
         lidar.start_range_continuous();
 

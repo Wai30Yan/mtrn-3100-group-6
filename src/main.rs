@@ -10,7 +10,7 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, fmt::Write, panic::PanicInfo};
+use core::{cell::RefCell, f32, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
@@ -18,12 +18,11 @@ use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::i2c::RefCellDevice;
 use na::{Isometry2, Translation2, Vector2};
 use nb::block;
-use ssd1306::{I2CDisplayInterface, Ssd1306, mode::DisplayConfig, rotation::DisplayRotation, size::DisplaySize128x64};
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
     gpio::{GpioExt, PinState},
-    hal::{delay::DelayNs, i2c::I2c},
+    hal::delay::DelayNs,
     i2c::I2cExt,
     interrupt,
     pwm::PwmExt,
@@ -35,6 +34,7 @@ use stm32g4xx_hal::{
 };
 
 use crate::{
+    display::Display,
     encoder::EncoderInstance,
     imu::Imu,
     lidar::Lidar,
@@ -46,6 +46,7 @@ use crate::{
 
 extern crate nalgebra as na;
 
+pub mod display;
 pub mod encoder;
 pub mod imu;
 pub mod lidar;
@@ -71,7 +72,7 @@ pub type I2cDev<'a> = RefCellDevice<
     >,
 >;
 
-const TIMESTEP_MS: u32 = 10;
+const TIMESTEP_MS: u32 = 50;
 const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
@@ -170,7 +171,7 @@ fn main() -> ! {
     let gpioa = dp.GPIOA.split(&mut rcc);
     let gpiob = dp.GPIOB.split(&mut rcc);
     let gpioc = dp.GPIOC.split(&mut rcc);
-    let gpiod = dp.GPIOD.split(&mut rcc);
+    let _gpiod = dp.GPIOD.split(&mut rcc);
 
     // Allow code to sleep, should only be used in the main loop
     let mut delay = cp.SYST.delay(&rcc.clocks);
@@ -181,7 +182,7 @@ fn main() -> ! {
             pin_dp: gpioa.pa12.into_alternate(),
         }))
     };
-    let mut led = gpioc.pc6.into_push_pull_output();
+    let _led = gpioc.pc6.into_push_pull_output();
     // For USB tick, if the this is too slow then the buffers can get over
     // filled so run things at 1kHz to avoid this.
     Timer::new(dp.TIM7, &rcc.clocks)
@@ -246,12 +247,12 @@ fn main() -> ! {
 
     let mut period_timer = Timer::new(dp.TIM8, &rcc.clocks).start_count_down(TIMESTEP_MS.millis());
 
-    let mut i2c = RefCell::new(dp.I2C2.i2c(
+    let i2c = RefCell::new(dp.I2C2.i2c(
         (
             gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
             gpioa.pa9.into_alternate_open_drain().internal_pull_up(true),
         ),
-        10.kHz(),
+        400.kHz(),
         &mut rcc,
     ));
 
@@ -306,16 +307,8 @@ fn main() -> ! {
     let mut observer = StateObserver::default();
 
     let mut motion_manager = MotionManager::default();
-
-    let display_interface = I2CDisplayInterface::new(RefCellDevice::new(&i2c));
-    let mut display = Ssd1306::new(display_interface, DisplaySize128x64, DisplayRotation::Rotate0).into_terminal_mode();
-    display.init().unwrap();
-    display.clear().unwrap();
-    loop {
-        for c in "Hello World\n".chars() {
-            display.write_char(c).unwrap();
-        }
-    }
+    let mut display = Display::new(RefCellDevice::new(&i2c));
+    display.print("Hello World!\n");
 
     let solution: &[Motion] = &[
         Motion::Line {
@@ -330,7 +323,7 @@ fn main() -> ! {
     let mut solution_step: usize = 0;
 
     // Let the state observer settle
-    for _ in 1..450 {
+    for _ in 1..100 {
         encoder_left.update();
         encoder_right.update();
         imu.update();
@@ -366,6 +359,12 @@ fn main() -> ! {
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
+
+        display.clear();
+        let p = motion_manager.pose();
+        display.print(&format!("{:?}\n", p.translation.vector[0]));
+        display.print(&format!("{:?}\n", p.translation.vector[1]));
+        display.print(&format!("{:?}\n", p.rotation.angle()));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
