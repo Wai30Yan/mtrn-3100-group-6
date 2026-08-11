@@ -45,13 +45,14 @@ use crate::{
 extern crate nalgebra as na;
 
 pub mod encoder;
+pub mod explorer;
 pub mod imu;
 pub mod lidar;
+pub mod map;
 pub mod motion_manager;
 pub mod motor;
 pub mod serial;
 pub mod state_observer;
-pub mod map;
 
 pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
 

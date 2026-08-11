@@ -20,6 +20,9 @@ usbd-serial = "0.2.2"
 usb-device = "0.3.2"
 nalgebra = { version = "0.35.0", default-features = false, features = [ "libm", "alloc" ] }
 bitflags = "2.13.1"
+embedded-graphics = "0.8"
+ssd1306 = "0.8"
+heapless = "0.9.3"
 
 # allows use of `cargo fix`
 [[bin]]

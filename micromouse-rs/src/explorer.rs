@@ -16,7 +16,7 @@ pub enum ExplorerAction {
     Wait,
 }
 
-pub struct Explorer<const W: usize, const H:usize> {
+pub struct Explorer<const W: usize, const H: usize> {
     current_pos: Pos,
     heading: Direction,
     state: ExplorerState,
@@ -46,6 +46,7 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
     }
 
     pub fn find_next_target(&self, map: &MazeMap<W, H>) -> Option<Pos> {
+        // Stage 1: check immediate neighbors - return nothing for dead end
         for &dir in &[
             self.heading,
             self.heading.turn_left(),
@@ -55,20 +56,21 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
             if !map.has_wall(self.current_pos, dir) {
                 if let Some(next_pos) = map.neighbor_in_dir(self.current_pos, dir) {
                     if !map.is_visited(next_pos) {
-                        return Some(next_pos)
+                        return Some(next_pos);
                     }
                 }
             }
         }
 
+        // When dead end, do Backtracking to see unvisited cells
         let mut best_target: Option<Pos> = None;
-        let mut shortest_len = usize::Max;
+        let mut shortest_len = usize::MAX;
 
         for x in 0..W {
             for y in 0..H {
                 let pos = (x as u8, y as u8);
-                if  !map.is_visited(pos) {
-                    if let Some(path) = map.BFS(self.current_pos, pos) {
+                if !map.is_visited(pos) {
+                    if let Some(path) = map.find_shortest_path(self.current_pos, pos) {
                         if path.len() < shortest_len {
                             shortest_len = path.len();
                             best_target = Some(pos);
@@ -81,17 +83,19 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
         best_target
     }
 
-
+    // Desicion Engine for updating Exploration State & Action
+    // Run once per control cycle to update internal coordinates, plan paths
+    // and return motion commands [MoveForward, TurnLeft, TurnRight, Wait]
     pub fn step(&mut self, map: &mut MazeMap<W, H>) -> ExplorerAction {
         match self.state {
             ExplorerState::Done => ExplorerAction::Wait,
 
             ExplorerState::Exploring => {
-                // Find the next target if there's no path
+                // Find the next unvisited target if there's no (remaining) path
                 if self.path.is_empty() {
                     if let Some(target) = self.find_next_target(map) {
-                        if let Some(full_path) = map.BFS(self.current_pos, target) {
-                            // skip current_pos
+                        if let Some(full_path) = map.find_shortest_path(self.current_pos, target) {
+                            // skip robot's current position/cell
                             self.path = full_path.into_iter().skip(1).collect();
                         }
                     } else {
@@ -101,13 +105,9 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
                     }
                 }
 
-                // Get the next cell coordinate in planned path
-                let next_cell = match self.path.first() {
-                    Some(&pos) => pos,
-                    None => {
-                        // No path available or target unreachable; stay put
-                        return ExplorerAction::Wait;
-                    }
+                // Get the next cell coordinate in planned path, return Wait if path is empty
+                let Some(&next_cell) = self.path.first() else {
+                    return ExplorerAction::Wait;
                 };
 
                 // Determine which direction the next cell is relative to current position
@@ -144,7 +144,7 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
 
                 // Compute shortest path back to start (0, 0) if path queue is empty
                 if self.path.is_empty() {
-                    if let Some(home_path) = map.BFS(self.current_pos, (0, 0)) {
+                    if let Some(home_path) = map.find_shortest_path(self.current_pos, (0, 0)) {
                         self.path = home_path.into_iter().skip(1).collect();
                     } else {
                         self.state = ExplorerState::Done;

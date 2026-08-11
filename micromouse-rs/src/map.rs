@@ -1,5 +1,13 @@
 use bitflags::bitflags;
-use stm32g4xx_hal::serial::Parity;
+use core::{cell, fmt::Write};
+use embedded_graphics::{
+    mono_font::{MonoTextStyle, ascii::FONT_6X10},
+    pixelcolor::BinaryColor,
+    prelude::*,
+    primitives::{Line, PrimitiveStyle, Rectangle},
+    text::Text,
+};
+use heapless::String;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -32,23 +40,24 @@ impl Direction {
         match self {
             Direction::North => Direction::South,
             Direction::South => Direction::North,
-            Direction::East  => Direction::West,
-            Direction::West  => Direction::East,
+            Direction::East => Direction::West,
+            Direction::West => Direction::East,
         }
     }
 
     pub fn to_wall(self) -> Walls {
         match self {
             Direction::North => Walls::NORTH,
-            Direction::East  => Walls::EAST,
+            Direction::East => Walls::EAST,
             Direction::South => Walls::SOUTH,
-            Direction::West  => Walls::WEST,
+            Direction::West => Walls::WEST,
         }
     }
 }
 
 bitflags! {
     /// bitmasking Wall defines as a single u8 (1 byte)
+    /// 8x8 grid only use 64 bytes to store every wall
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Walls: u8 {
         const NORTH = 0b0001;
@@ -56,7 +65,6 @@ bitflags! {
         const SOUTH = 0b0100;
         const WEST  = 0b1000;
     }
-    
 }
 
 pub type Pos = (u8, u8);
@@ -64,7 +72,7 @@ pub type Pos = (u8, u8);
 pub struct MazeMap<const WIDTH: usize, const HEIGHT: usize> {
     // arrays of array - 2D matrix
     walls: [[Walls; HEIGHT]; WIDTH],
-    visited: [[bool; HEIGHT]; WIDTH]
+    visited: [[bool; HEIGHT]; WIDTH],
 }
 
 impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
@@ -79,7 +87,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         self.visited[pos.0 as usize][pos.1 as usize] = true;
     }
 
-    pub fn is_visited(&mut self, pos: Pos) -> bool {
+    pub fn is_visited(&self, pos: Pos) -> bool {
         self.visited[pos.0 as usize][pos.1 as usize]
     }
 
@@ -100,9 +108,9 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         let (x, y) = (pos.0 as i16, pos.1 as i16);
         let (nx, ny) = match dir {
             Direction::North => (x, y + 1),
-            Direction::East  => (x + 1, y),
+            Direction::East => (x + 1, y),
             Direction::South => (x, y - 1),
-            Direction::West  => (x - 1, 1),
+            Direction::West => (x - 1, 1),
         };
 
         if nx >= 0 && nx < WIDTH as i16 && ny >= 0 && ny < HEIGHT as i16 {
@@ -131,7 +139,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         self.walls[x][y].contains(dir.to_wall())
     }
 
-    pub fn BFS(&self, start: Pos, goal: Pos) -> Option<alloc::vec::Vec<Pos>> {
+    pub fn find_shortest_path(&self, start: Pos, goal: Pos) -> Option<alloc::vec::Vec<Pos>> {
         use alloc::collections::VecDeque;
         use alloc::vec::Vec;
 
@@ -144,7 +152,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         let mut queue = VecDeque::new();
         let mut parents = [[None; HEIGHT]; WIDTH];
         let mut visited = [[false; HEIGHT]; WIDTH];
-    
+
         queue.push_back(start);
         visited[start.0 as usize][start.1 as usize] = true;
 
@@ -156,7 +164,12 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
                 break;
             }
 
-            for &dir in &[Direction::North, Direction::East, Direction::South, Direction::West] {
+            for &dir in &[
+                Direction::North,
+                Direction::East,
+                Direction::South,
+                Direction::West,
+            ] {
                 if !self.has_wall(curr, dir) {
                     if let Some(next) = self.neighbor_in_dir(curr, dir) {
                         let (nx, ny) = (next.0 as usize, next.1 as usize);
@@ -169,7 +182,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
                 }
             }
         }
-    
+
         if !found {
             return None;
         }
@@ -186,17 +199,17 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
                 break;
             }
         }
-    
+
         path.reverse();
         Some(path)
     }
 
     pub fn update_from_lidars(
-        &mut self, 
-        current_pos: Pos, 
-        heading: Direction, 
-        left_dist: Option<f32>, 
-        right_dist: Option<f32>, 
+        &mut self,
+        current_pos: Pos,
+        heading: Direction,
+        left_dist: Option<f32>,
+        right_dist: Option<f32>,
         front_dist: Option<f32>,
         wall_threshold_m: f32,
     ) {
@@ -210,17 +223,87 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
 
         if let Some(dist) = left_dist {
             if dist < wall_threshold_m {
-                self.set_wall(current_pos, heading.turn_left);
+                self.set_wall(current_pos, heading.turn_left());
             }
         }
 
         if let Some(dist) = right_dist {
             if dist < wall_threshold_m {
-                self.set_wall(current_pos, heading.turn_right);
+                self.set_wall(current_pos, heading.turn_right());
             }
         }
     }
+
+    /// Draws 64x64 maze grid on left half of display and completion
+    /// percentage/status bar on the right half
+    pub fn draw_on_display<D>(&self, display: &mut D, robot_pos: Pos) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        display.clear(BinaryColor::Off)?;
+
+        let cell_size = 64 / WIDTH as i32;
+
+        for x in 0..WIDTH {
+            for y in 0..HEIGHT {
+                let pos = (x as u8, y as u8);
+                let px = x as i32 * cell_size;
+                // Invert Y coordinate so (0,0) sits at bottom-left grid
+                let py = 63 - ((y as i32 + 1) * cell_size);
+
+                // Marks visited cells (centered dot)
+                if self.is_visited(pos) {
+                    Pixel(
+                        Point::new(px + cell_size / 2, py + cell_size / 2),
+                        BinaryColor::On,
+                    )
+                    .draw(display)?;
+                }
+
+                // Draw North Wall
+                if self.has_wall(pos, Direction::North) {
+                    Line::new(Point::new(px, py), Point::new(px + cell_size, py))
+                        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                        .draw(display)?;
+                }
+
+                // Draw West Wall
+                if self.has_wall(pos, Direction::West) {
+                    Line::new(Point::new(px, py), Point::new(px, cell_size + py))
+                        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                        .draw(display)?;
+                }
+            }
+        }
+
+        // For Robot's current position/cell
+        let rx = robot_pos.0 as i32 * cell_size + 2;
+        let ry = 63 - ((robot_pos.1 as i32 + 1) * cell_size) + 2;
+        Rectangle::new(
+            Point::new(rx, ry),
+            Size::new((cell_size - 3) as u32, (cell_size - 3) as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+
+        // Render Status & Completion percentage on Right Half of OLED (X: 68..128)
+        let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+        Text::new("MAP STATUS", Point::new(68, 12), text_style).draw(display)?;
+
+        let percentage = self.completion_percentage();
+        let mut buffer: String<32> = String::new();
+        let _ = write!(buffer, "Done: {:.0}%", percentage);
+        Text::new(buffer.as_str(), Point::new(68, 28), text_style).draw(display)?;
+
+        let bar_width = ((percentage / 100.0) * 50.0) as u32;
+        Rectangle::new(Point::new(68, 42), Size::new(52, 10))
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .draw(display)?;
+        Rectangle::new(Point::new(69, 43), Size::new(bar_width, 8))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(display)?;
+
+        Ok(())
+    }
 }
-
-
-
