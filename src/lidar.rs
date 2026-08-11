@@ -1,8 +1,11 @@
 use cortex_m::asm::delay;
 use nb::Error::WouldBlock;
-use stm32g4xx_hal::gpio::{AnyPin, OpenDrain, Output};
+use stm32g4xx_hal::{
+    gpio::{AnyPin, OpenDrain, Output},
+    hal::i2c::I2c,
+};
 
-use crate::I2cBus;
+use crate::I2cDev;
 
 const IDENTIFICATION_MODEL_ID: u16 = 0x000;
 const IDENTIFICATION_MODEL_REV_MAJOR: u16 = 0x001;
@@ -91,7 +94,7 @@ pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
 }
 
 pub struct Lidar<'a> {
-    i2c_bus: &'a I2cBus<'a>,
+    i2c_dev: I2cDev<'a>,
     address: u8,
     distance: Option<f32>,
     ptp_offset: u8, // for scaling math, not for callibrating physical mounting distance
@@ -99,7 +102,7 @@ pub struct Lidar<'a> {
 
 impl<'a> Lidar<'a> {
     pub fn new(
-        i2c_bus: &'a I2cBus<'a>,
+        i2c_dev: I2cDev<'a>,
         mut enable_pin: AnyPin<Output<OpenDrain>>,
         address: u8,
     ) -> Self {
@@ -108,7 +111,7 @@ impl<'a> Lidar<'a> {
         delay(24 * 1024 * 1024);
 
         let mut lidar = Self {
-            i2c_bus,
+            i2c_dev,
             address: DEFAULT_LIDAR_ADDR,
             distance: None,
             ptp_offset: 0,
@@ -151,7 +154,7 @@ impl<'a> Lidar<'a> {
         lidar.address = address;
 
         // update ptp_offset
-        lidar.ptp_offset = lidar.read_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET) as u8;
+        lidar.ptp_offset = lidar.read_reg(SYSRANGE_PART_TO_PART_RANGE_OFFSET);
         lidar.configure_default();
         lidar.start_range_continuous();
 
@@ -159,16 +162,14 @@ impl<'a> Lidar<'a> {
     }
 
     fn write_reg(&mut self, reg: u16, val: u8) {
-        self.i2c_bus
-            .borrow_mut()
+        self.i2c_dev
             .write(self.address, &concat(&reg.to_be_bytes(), &[val]))
             .unwrap();
     }
 
     fn read_reg(&mut self, reg: u16) -> u8 {
         let mut buf = [0u8; 1];
-        self.i2c_bus
-            .borrow_mut()
+        self.i2c_dev
             .write_read(self.address, &reg.to_be_bytes(), &mut buf)
             .unwrap();
 
@@ -176,8 +177,7 @@ impl<'a> Lidar<'a> {
     }
 
     fn write_reg16(&mut self, reg: u16, val: u16) {
-        self.i2c_bus
-            .borrow_mut()
+        self.i2c_dev
             .write(
                 self.address,
                 &concat(&reg.to_be_bytes(), &val.to_be_bytes()),
@@ -252,16 +252,13 @@ impl<'a> Lidar<'a> {
     }
 
     pub fn set_scaling(&mut self, scaling: u8) {
-        if scaling < 1 || scaling > 3 {
+        if !(1..=3).contains(&scaling) {
             panic!("Scaling must be between 1 and 3");
         }
-        self.write_reg16(
-            RANGE_SCALER,
-            SCALER_VALUES[scaling as usize].try_into().unwrap(),
-        );
+        self.write_reg16(RANGE_SCALER, SCALER_VALUES[scaling as usize]);
         self.write_reg(
             SYSRANGE_PART_TO_PART_RANGE_OFFSET,
-            self.ptp_offset / scaling as u8,
+            self.ptp_offset / scaling,
         );
         self.write_reg(SYSRANGE_CROSSTALK_VALID_HEIGHT, 20 / scaling);
 

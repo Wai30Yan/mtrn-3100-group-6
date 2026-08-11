@@ -10,18 +10,19 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, panic::PanicInfo, todo, unimplemented};
+use core::{cell::RefCell, f32, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use na::{Isometry2, Rotation2, Translation2, Vector2};
+use embedded_hal_bus::i2c::RefCellDevice;
+use na::{Isometry2, Translation2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
     gpio::{GpioExt, PinState},
-    hal::{delay::DelayNs, i2c::I2c},
+    hal::delay::DelayNs,
     i2c::I2cExt,
     interrupt,
     pwm::PwmExt,
@@ -33,6 +34,7 @@ use stm32g4xx_hal::{
 };
 
 use crate::{
+    display::Display,
     encoder::EncoderInstance,
     imu::Imu,
     lidar::Lidar,
@@ -44,6 +46,7 @@ use crate::{
 
 extern crate nalgebra as na;
 
+pub mod display;
 pub mod encoder;
 pub mod imu;
 pub mod lidar;
@@ -52,17 +55,25 @@ pub mod motor;
 pub mod serial;
 pub mod state_observer;
 
-pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
+pub type I2cDev<'a> = RefCellDevice<
+    'a,
+    stm32g4xx_hal::i2c::I2c<
+        stm32g4::Periph<stm32g4::stm32g431::i2c1::RegisterBlock, 1073764352>,
+        stm32g4xx_hal::gpio::Pin<
+            'A',
+            8,
+            stm32g4xx_hal::gpio::Alternate<4, stm32g4xx_hal::gpio::OpenDrain>,
+        >,
+        stm32g4xx_hal::gpio::Pin<
+            'A',
+            9,
+            stm32g4xx_hal::gpio::Alternate<4, stm32g4xx_hal::gpio::OpenDrain>,
+        >,
+    >,
+>;
 
-const TIMESTEP_MS: u32 = 10;
+const TIMESTEP_MS: u32 = 50;
 const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
-
-enum Task {
-    StraightLineTracking,
-    DrivingAndStopping,
-    Turning,
-    ChainingMovements(&'static str),
-}
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
     a: &[T; A],
@@ -160,7 +171,7 @@ fn main() -> ! {
     let gpioa = dp.GPIOA.split(&mut rcc);
     let gpiob = dp.GPIOB.split(&mut rcc);
     let gpioc = dp.GPIOC.split(&mut rcc);
-    let gpiod = dp.GPIOD.split(&mut rcc);
+    let _gpiod = dp.GPIOD.split(&mut rcc);
 
     // Allow code to sleep, should only be used in the main loop
     let mut delay = cp.SYST.delay(&rcc.clocks);
@@ -171,7 +182,7 @@ fn main() -> ! {
             pin_dp: gpioa.pa12.into_alternate(),
         }))
     };
-    let mut led = gpioc.pc6.into_push_pull_output();
+    let _led = gpioc.pc6.into_push_pull_output();
     // For USB tick, if the this is too slow then the buffers can get over
     // filled so run things at 1kHz to avoid this.
     Timer::new(dp.TIM7, &rcc.clocks)
@@ -236,15 +247,14 @@ fn main() -> ! {
 
     let mut period_timer = Timer::new(dp.TIM8, &rcc.clocks).start_count_down(TIMESTEP_MS.millis());
 
-    let mut raw_i2c = dp.I2C2.i2c(
+    let i2c = RefCell::new(dp.I2C2.i2c(
         (
             gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
             gpioa.pa9.into_alternate_open_drain().internal_pull_up(true),
         ),
-        10.kHz(),
+        400.kHz(),
         &mut rcc,
-    );
-    let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
+    ));
 
     // Run at a higher frequency than the Arduino for smoother motion
     let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 24.kHz(), &mut rcc);
@@ -276,7 +286,7 @@ fn main() -> ! {
     let mut encoder_left = EncoderInstance::new(dp.TIM4, false, &mut rcc);
     let mut encoder_right = EncoderInstance::new(dp.TIM3, true, &mut rcc);
 
-    let mut imu = Imu::new(&i2c_bus);
+    let mut imu = Imu::new(RefCellDevice::new(&i2c));
 
     let lidar_l_en = gpiob
         .pb12
@@ -290,43 +300,37 @@ fn main() -> ! {
         .pb14
         .into_open_drain_output_in_state(PinState::Low)
         .erase();
-    let mut lidar_l = Lidar::new(&i2c_bus, lidar_l_en, LIDAR_ADDR_L);
-    let mut lidar_r = Lidar::new(&i2c_bus, lidar_r_en, LIDAR_ADDR_R);
-    let mut lidar_f = Lidar::new(&i2c_bus, lidar_f_en, LIDAR_ADDR_F);
+    let mut lidar_l = Lidar::new(RefCellDevice::new(&i2c), lidar_l_en, LIDAR_ADDR_L);
+    let mut lidar_r = Lidar::new(RefCellDevice::new(&i2c), lidar_r_en, LIDAR_ADDR_R);
+    let mut lidar_f = Lidar::new(RefCellDevice::new(&i2c), lidar_f_en, LIDAR_ADDR_F);
 
-    let mut observer = StateObserver::new();
+    let mut observer = StateObserver::default();
 
-    let mut motion_manager = MotionManager::new();
+    let mut motion_manager = MotionManager::default();
+    let mut display = Display::new(RefCellDevice::new(&i2c));
+    display.print("Hello World!\n");
+
+    let solution: &[Motion] = &[
+        Motion::Line {
+            final_position: Translation2::new(0.3, 0.0),
+            final_speed: 1.0,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.4, 0.1), f32::consts::FRAC_PI_2),
+            final_speed: 0.0,
+        },
+    ];
+    let mut solution_step: usize = 0;
 
     // Let the state observer settle
-    for _ in 1..450 {
+    for _ in 1..100 {
         encoder_left.update();
         encoder_right.update();
         imu.update();
-        observer.update(true, &imu, &encoder_left, &encoder_right);
+        observer.update(&imu, &encoder_left, &encoder_right);
 
         block!(period_timer.wait()).unwrap();
     }
-
-    // let task = Task::ChainingMovements("lffrflfr");
-    let task = Task::StraightLineTracking;
-
-    let solution: &[Task] = &[Task::StraightLineTracking];
-
-    match task {
-        Task::StraightLineTracking => {
-            motion_manager.set_target(Motion::Line {
-                final_position: Translation2::new(1.0, 0.0),
-                final_speed: 0.0,
-            });
-        }
-        Task::DrivingAndStopping => {}
-        Task::Turning => {}
-        Task::ChainingMovements(_) => {}
-    }
-
-    let mut motion_index: usize = 0;
-    let mut target: Vector2<f32> = Vector2::new(0.10, 0.0);
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -343,80 +347,24 @@ fn main() -> ! {
         lidar_r.update();
         lidar_f.update();
 
-        observer.update(
-            if let Task::Turning = task {
-                false
-            } else {
-                true
-            },
-            &imu,
-            &encoder_left,
-            &encoder_right,
-        );
+        observer.update(&imu, &encoder_left, &encoder_right);
 
-        match task {
-            Task::StraightLineTracking => {}
-            Task::DrivingAndStopping => {
-                target = target * 0.95
-                    + (observer.pose().translation.vector
-                        + Vector2::new(lidar_f.distance().unwrap_or(0.20) - 0.10, 0.0))
-                        * 0.05;
-                // Relative to wall
-                motion_manager.set_target(Motion::Pose {
-                    pose: Isometry2::new(target, 0.0),
-                });
-            }
-            Task::Turning => {
-                motion_manager.set_target(Motion::Pivot {
-                    rotation: Rotation2::new(-f32::consts::FRAC_PI_2),
-                });
-            }
-            Task::ChainingMovements(cmd) => {
-                if motion_manager.idle()
-                    && let Some(c) = cmd.chars().nth(motion_index)
-                {
-                    motion_index += 1;
-                    motion_manager.set_target(match c {
-                        'l' => Motion::Pivot {
-                            rotation: (motion_manager.pose().rotation
-                                * Rotation2::new(f32::consts::FRAC_PI_2))
-                            .into(),
-                        },
-                        'r' => Motion::Pivot {
-                            rotation: (motion_manager.pose().rotation
-                                * Rotation2::new(-f32::consts::FRAC_PI_2))
-                            .into(),
-                        },
-                        'f' => Motion::Pose {
-                            pose: (motion_manager.pose()
-                                * Isometry2::new(Vector2::new(0.175, 0.0), 0.0)),
-                        },
-                        _ => {
-                            unimplemented!("Invalid command")
-                        }
-                    });
-                }
-            }
+        if motion_manager.idle() && solution_step < solution.len() {
+            motion_manager.set_target(solution[solution_step]);
+            solution_step += 1;
         }
 
         let desired = motion_manager.update(observer.pose());
         let (wl, wr) = desired.to_wheel_velocities();
 
-        print!("{:?}\r\n", observer.pose());
-        // delay.delay_ms(1);
-        print!("{:?}\r\n", motion_manager.pose());
-        // delay.delay_ms(1);
-        // print!("{:?}\r\n", desired.to_wheel_velocities());
-
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
 
-        print!(
-            "Ll: {:?} m\tLr: {:?} m\tLf: {:?} m\r\n",
-            lidar_l.distance(),
-            lidar_r.distance(),
-            lidar_f.distance()
-        );
+        display.clear();
+        let p = motion_manager.pose();
+        display.print(&format!("{:?}\n", p.translation.vector[0]));
+        display.print(&format!("{:?}\n", p.translation.vector[1]));
+        display.print(&format!("{:?}\n", p.rotation.angle()));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can

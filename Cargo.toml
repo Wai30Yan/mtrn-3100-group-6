@@ -19,6 +19,8 @@ fugit = "0.3.9"
 usbd-serial = "0.2.2"
 usb-device = "0.3.2"
 nalgebra = { version = "0.35.0", default-features = false, features = [ "libm", "alloc" ] }
+ssd1306 = "0.10.0"
+embedded-hal-bus = "0.3.0"
 
 # allows use of `cargo fix`
 [[bin]]
