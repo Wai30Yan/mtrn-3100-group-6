@@ -32,6 +32,10 @@ use stm32g4xx_hal::{
     usb::{self, UsbBus},
 };
 
+use embedded_graphics::prelude::*;
+use explorer::{Explorer, ExplorerAction, ExplorerState};
+use map::{Direction, MazeMap};
+
 use crate::{
     encoder::EncoderInstance,
     imu::Imu,
@@ -370,31 +374,31 @@ fn main() -> ! {
                 });
             }
             Task::ChainingMovements(cmd) => {
-                if motion_manager.idle()
-                    && let Some(c) = cmd.chars().nth(motion_index)
-                {
-                    motion_index += 1;
-                    motion_manager.set_target(match c {
-                        'l' => Motion::Pivot {
-                            rotation: (motion_manager.pose().rotation
-                                * Rotation2::new(f32::consts::FRAC_PI_2))
-                            .into(),
-                        },
-                        'r' => Motion::Pivot {
-                            rotation: (motion_manager.pose().rotation
-                                * Rotation2::new(-f32::consts::FRAC_PI_2))
-                            .into(),
-                        },
-                        'f' => Motion::Line {
-                            final_position: (motion_manager.pose()
-                                * Isometry2::new(Vector2::new(0.18, 0.0), 0.0))
-                            .translation,
-                            final_speed: 0.0,
-                        },
-                        _ => {
-                            unimplemented!("Invalid command")
-                        }
-                    });
+                if motion_manager.idle() {
+                    if let Some(c) = cmd.chars().nth(motion_index) {
+                        motion_index += 1;
+                        motion_manager.set_target(match c {
+                            'l' => Motion::Pivot {
+                                rotation: (motion_manager.pose().rotation
+                                    * Rotation2::new(f32::consts::FRAC_PI_2))
+                                .into(),
+                            },
+                            'r' => Motion::Pivot {
+                                rotation: (motion_manager.pose().rotation
+                                    * Rotation2::new(-f32::consts::FRAC_PI_2))
+                                .into(),
+                            },
+                            'f' => Motion::Line {
+                                final_position: (motion_manager.pose()
+                                    * Isometry2::new(Vector2::new(0.18, 0.0), 0.0))
+                                .translation,
+                                final_speed: 0.0,
+                            },
+                            _ => {
+                                unimplemented!("Invalid command")
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -426,5 +430,54 @@ fn main() -> ! {
          * As a result we do not need to run the control loop in an interupt.
          */
         block!(period_timer.wait()).unwrap();
+    }
+
+    // ------- For Gride Map and Exploration Engine --------
+    let mut map = MazeMap::<8, 8>::new();
+    let mut explorer = Explorer::<8, 8>::new((0,0), Direction::North);
+
+    const WALL_THRESHOLD_M: f32 = 0.15;
+
+    loop {
+        /*  --------------------------------------------
+            Read raw distances from LiDAR sensors
+            Update Map
+            -------------------------------------------- */
+        let front_dist   = lidar_f.distance();
+        let left_dist: Option<f32> = lidar_l.distance();
+        let right_dist: Option<f32> = lidar_r.distance();
+
+        // Update walls in current cell based on current heading
+        map.update_from_lidars(explorer.current_pos(), explorer.heading(), left_dist, right_dist, front_dist, WALL_THRESHOLD_M);
+
+        /*  --------------------------------------------
+            Render Map & Status to OLED Display
+            -------------------------------------------- */
+        // TODO: Declare display object with i2c_bus
+        //let _ = map.draw_on_display(&mut display, explorer.current_pos());
+
+        let action = explorer.step(&mut map);
+
+        match action {
+            ExplorerAction::MoveForward => {
+                // Execute hardware motor control
+            }
+            ExplorerAction::TurnLeft => {
+                // Execute hardware motor control
+            }
+            ExplorerAction::TurnRight => {
+                // Execute hardware motor control
+            }
+            ExplorerAction::Wait => {
+                // Do nothing, wait for next loop
+            }
+        }
+
+        if explorer.state() == ExplorerState::Done {
+            loop {
+                // Keep rendering display final state
+                
+            }
+        }
     }
 }
