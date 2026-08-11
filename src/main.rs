@@ -10,12 +10,15 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, panic::PanicInfo};
+use core::{cell::RefCell, f32, fmt::Write, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
+use embedded_hal_bus::i2c::RefCellDevice;
+use na::{Isometry2, Translation2, Vector2};
 use nb::block;
+use ssd1306::{I2CDisplayInterface, Ssd1306, mode::DisplayConfig, rotation::DisplayRotation, size::DisplaySize128x64};
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
     delay::SYSTDelayExt,
@@ -51,7 +54,22 @@ pub mod motor;
 pub mod serial;
 pub mod state_observer;
 
-pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error> + 'static)>;
+pub type I2cDev<'a> = RefCellDevice<
+    'a,
+    stm32g4xx_hal::i2c::I2c<
+        stm32g4::Periph<stm32g4::stm32g431::i2c1::RegisterBlock, 1073764352>,
+        stm32g4xx_hal::gpio::Pin<
+            'A',
+            8,
+            stm32g4xx_hal::gpio::Alternate<4, stm32g4xx_hal::gpio::OpenDrain>,
+        >,
+        stm32g4xx_hal::gpio::Pin<
+            'A',
+            9,
+            stm32g4xx_hal::gpio::Alternate<4, stm32g4xx_hal::gpio::OpenDrain>,
+        >,
+    >,
+>;
 
 const TIMESTEP_MS: u32 = 10;
 const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
@@ -228,15 +246,14 @@ fn main() -> ! {
 
     let mut period_timer = Timer::new(dp.TIM8, &rcc.clocks).start_count_down(TIMESTEP_MS.millis());
 
-    let mut raw_i2c = dp.I2C2.i2c(
+    let mut i2c = RefCell::new(dp.I2C2.i2c(
         (
             gpioa.pa8.into_alternate_open_drain().internal_pull_up(true),
             gpioa.pa9.into_alternate_open_drain().internal_pull_up(true),
         ),
         10.kHz(),
         &mut rcc,
-    );
-    let i2c_bus: I2cBus = RefCell::new(&mut raw_i2c);
+    ));
 
     // Run at a higher frequency than the Arduino for smoother motion
     let mut motor_l_pwm = dp.TIM17.pwm(gpioa.pa7.into_alternate(), 24.kHz(), &mut rcc);
@@ -268,7 +285,7 @@ fn main() -> ! {
     let mut encoder_left = EncoderInstance::new(dp.TIM4, false, &mut rcc);
     let mut encoder_right = EncoderInstance::new(dp.TIM3, true, &mut rcc);
 
-    let mut imu = Imu::new(&i2c_bus);
+    let mut imu = Imu::new(RefCellDevice::new(&i2c));
 
     let lidar_l_en = gpiob
         .pb12
@@ -282,15 +299,34 @@ fn main() -> ! {
         .pb14
         .into_open_drain_output_in_state(PinState::Low)
         .erase();
-    let mut lidar_l = Lidar::new(&i2c_bus, lidar_l_en, LIDAR_ADDR_L);
-    let mut lidar_r = Lidar::new(&i2c_bus, lidar_r_en, LIDAR_ADDR_R);
-    let mut lidar_f = Lidar::new(&i2c_bus, lidar_f_en, LIDAR_ADDR_F);
+    let mut lidar_l = Lidar::new(RefCellDevice::new(&i2c), lidar_l_en, LIDAR_ADDR_L);
+    let mut lidar_r = Lidar::new(RefCellDevice::new(&i2c), lidar_r_en, LIDAR_ADDR_R);
+    let mut lidar_f = Lidar::new(RefCellDevice::new(&i2c), lidar_f_en, LIDAR_ADDR_F);
 
     let mut observer = StateObserver::default();
 
     let mut motion_manager = MotionManager::default();
 
-    let solution: &[Motion] = &[];
+    let display_interface = I2CDisplayInterface::new(RefCellDevice::new(&i2c));
+    let mut display = Ssd1306::new(display_interface, DisplaySize128x64, DisplayRotation::Rotate0).into_terminal_mode();
+    display.init().unwrap();
+    display.clear().unwrap();
+    loop {
+        for c in "Hello World\n".chars() {
+            display.write_char(c).unwrap();
+        }
+    }
+
+    let solution: &[Motion] = &[
+        Motion::Line {
+            final_position: Translation2::new(0.3, 0.0),
+            final_speed: 1.0,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.4, 0.1), f32::consts::FRAC_PI_2),
+            final_speed: 0.0,
+        },
+    ];
     let mut solution_step: usize = 0;
 
     // Let the state observer settle
@@ -321,7 +357,7 @@ fn main() -> ! {
         observer.update(&imu, &encoder_left, &encoder_right);
 
         if motion_manager.idle() && solution_step < solution.len() {
-            // motion_manager.set_target(solution[solution_step]);
+            motion_manager.set_target(solution[solution_step]);
             solution_step += 1;
         }
 
@@ -330,13 +366,6 @@ fn main() -> ! {
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
-
-        print!(
-            "Ll: {:?} m\tLr: {:?} m\tLf: {:?} m\r\n",
-            lidar_l.distance(),
-            lidar_r.distance(),
-            lidar_f.distance()
-        );
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can

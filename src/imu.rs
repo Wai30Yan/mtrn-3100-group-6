@@ -1,9 +1,11 @@
 use core::f32;
 
-use crate::{I2cBus, print};
+use stm32g4xx_hal::hal::i2c::I2c;
+
+use crate::{I2cDev, print};
 
 pub struct Imu<'a> {
-    i2c_bus: &'a I2cBus<'a>,
+    i2c_dev: I2cDev<'a>,
 
     ax: f32,
     ay: f32,
@@ -21,30 +23,15 @@ const GYRO_CONFIG_REG: u8 = 0x1B;
 const ACCEL_CONFIG_REG: u8 = 0x1C;
 
 impl<'a> Imu<'a> {
-    pub fn new(i2c_bus: &'a I2cBus<'a>) -> Self {
-        i2c_bus
-            .borrow_mut()
-            .write(ADDRESS, &[PWR_MGMT_1_REG, 0x01])
-            .unwrap();
-        i2c_bus
-            .borrow_mut()
-            .write(ADDRESS, &[SMPLRT_DIV_REG, 0x00])
-            .unwrap();
-        i2c_bus
-            .borrow_mut()
-            .write(ADDRESS, &[CONFIG_REG, 0x00])
-            .unwrap();
-        i2c_bus
-            .borrow_mut()
-            .write(ADDRESS, &[GYRO_CONFIG_REG, 0x08])
-            .unwrap();
-        i2c_bus
-            .borrow_mut()
-            .write(ADDRESS, &[ACCEL_CONFIG_REG, 0x08])
-            .unwrap();
+    pub fn new(mut i2c_dev: I2cDev<'a>) -> Self {
+        i2c_dev.write(ADDRESS, &[PWR_MGMT_1_REG, 0x01]).unwrap();
+        i2c_dev.write(ADDRESS, &[SMPLRT_DIV_REG, 0x00]).unwrap();
+        i2c_dev.write(ADDRESS, &[CONFIG_REG, 0x00]).unwrap();
+        i2c_dev.write(ADDRESS, &[GYRO_CONFIG_REG, 0x08]).unwrap();
+        i2c_dev.write(ADDRESS, &[ACCEL_CONFIG_REG, 0x08]).unwrap();
 
         Self {
-            i2c_bus,
+            i2c_dev,
             ax: 0.0,
             ay: 0.0,
             gz: 0.0,
@@ -54,11 +41,7 @@ impl<'a> Imu<'a> {
     /// Read and buffer measurements from the IMU
     pub fn update(&mut self) {
         let mut buf = [0u8; 14];
-        if let Err(e) = self
-            .i2c_bus
-            .borrow_mut()
-            .write_read(ADDRESS, &[0x3b], &mut buf)
-        {
+        if let Err(e) = self.i2c_dev.write_read(ADDRESS, &[0x3b], &mut buf) {
             print!("{:?}\r\n", e);
         }
 

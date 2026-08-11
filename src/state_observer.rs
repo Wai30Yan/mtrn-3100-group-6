@@ -6,7 +6,7 @@ use crate::{DT, encoder::Encoder, imu::Imu};
 
 pub const R: f32 = 0.032;
 pub const B: f32 = 0.086;
-const IX: f32 = 0.011;
+const IX: f32 = -0.004;
 const IY: f32 = 0.020;
 
 const ENCODER_COVAR: f32 = 0.002;

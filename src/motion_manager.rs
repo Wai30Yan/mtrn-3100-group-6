@@ -55,6 +55,7 @@ const MAX_ANGULAR: f32 = 2.0;
 const OVERSHOOT_GAIN: f32 = 0.2;
 
 const EPSILON: f32 = 0.005;
+const ARC_EPSILON: f32 = 0.02;
 
 impl MotionManager {
     pub fn update(&mut self, observed_pose: Isometry2<f32>) -> ChassisSpeeds {
@@ -95,7 +96,7 @@ impl MotionManager {
                 let path_delta = final_pose / self.current_pose;
                 let mut turn_rate = 0.0;
 
-                if path_delta.translation.vector.norm() <= EPSILON {
+                if path_delta.translation.vector.norm() <= ARC_EPSILON {
                     self.current_pose = final_pose;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
