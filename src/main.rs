@@ -10,12 +10,11 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, panic::PanicInfo, todo, unimplemented};
+use core::{cell::RefCell, f32, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
-use na::{Isometry2, Rotation2, Translation2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
@@ -56,13 +55,6 @@ pub type I2cBus<'a> = RefCell<&'a mut (dyn I2c<Error = stm32g4xx_hal::i2c::Error
 
 const TIMESTEP_MS: u32 = 10;
 const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
-
-enum Task {
-    StraightLineTracking,
-    DrivingAndStopping,
-    Turning,
-    ChainingMovements(&'static str),
-}
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
     a: &[T; A],
@@ -294,39 +286,22 @@ fn main() -> ! {
     let mut lidar_r = Lidar::new(&i2c_bus, lidar_r_en, LIDAR_ADDR_R);
     let mut lidar_f = Lidar::new(&i2c_bus, lidar_f_en, LIDAR_ADDR_F);
 
-    let mut observer = StateObserver::new();
+    let mut observer = StateObserver::default();
 
-    let mut motion_manager = MotionManager::new();
+    let mut motion_manager = MotionManager::default();
+
+    let solution: &[Motion] = &[];
+    let mut solution_step: usize = 0;
 
     // Let the state observer settle
     for _ in 1..450 {
         encoder_left.update();
         encoder_right.update();
         imu.update();
-        observer.update(true, &imu, &encoder_left, &encoder_right);
+        observer.update(&imu, &encoder_left, &encoder_right);
 
         block!(period_timer.wait()).unwrap();
     }
-
-    // let task = Task::ChainingMovements("lffrflfr");
-    let task = Task::StraightLineTracking;
-
-    let solution: &[Task] = &[Task::StraightLineTracking];
-
-    match task {
-        Task::StraightLineTracking => {
-            motion_manager.set_target(Motion::Line {
-                final_position: Translation2::new(1.0, 0.0),
-                final_speed: 0.0,
-            });
-        }
-        Task::DrivingAndStopping => {}
-        Task::Turning => {}
-        Task::ChainingMovements(_) => {}
-    }
-
-    let mut motion_index: usize = 0;
-    let mut target: Vector2<f32> = Vector2::new(0.10, 0.0);
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -343,70 +318,15 @@ fn main() -> ! {
         lidar_r.update();
         lidar_f.update();
 
-        observer.update(
-            if let Task::Turning = task {
-                false
-            } else {
-                true
-            },
-            &imu,
-            &encoder_left,
-            &encoder_right,
-        );
+        observer.update(&imu, &encoder_left, &encoder_right);
 
-        match task {
-            Task::StraightLineTracking => {}
-            Task::DrivingAndStopping => {
-                target = target * 0.95
-                    + (observer.pose().translation.vector
-                        + Vector2::new(lidar_f.distance().unwrap_or(0.20) - 0.10, 0.0))
-                        * 0.05;
-                // Relative to wall
-                motion_manager.set_target(Motion::Pose {
-                    pose: Isometry2::new(target, 0.0),
-                });
-            }
-            Task::Turning => {
-                motion_manager.set_target(Motion::Pivot {
-                    rotation: Rotation2::new(-f32::consts::FRAC_PI_2),
-                });
-            }
-            Task::ChainingMovements(cmd) => {
-                if motion_manager.idle()
-                    && let Some(c) = cmd.chars().nth(motion_index)
-                {
-                    motion_index += 1;
-                    motion_manager.set_target(match c {
-                        'l' => Motion::Pivot {
-                            rotation: (motion_manager.pose().rotation
-                                * Rotation2::new(f32::consts::FRAC_PI_2))
-                            .into(),
-                        },
-                        'r' => Motion::Pivot {
-                            rotation: (motion_manager.pose().rotation
-                                * Rotation2::new(-f32::consts::FRAC_PI_2))
-                            .into(),
-                        },
-                        'f' => Motion::Pose {
-                            pose: (motion_manager.pose()
-                                * Isometry2::new(Vector2::new(0.175, 0.0), 0.0)),
-                        },
-                        _ => {
-                            unimplemented!("Invalid command")
-                        }
-                    });
-                }
-            }
+        if motion_manager.idle() && solution_step < solution.len() {
+            // motion_manager.set_target(solution[solution_step]);
+            solution_step += 1;
         }
 
         let desired = motion_manager.update(observer.pose());
         let (wl, wr) = desired.to_wheel_velocities();
-
-        print!("{:?}\r\n", observer.pose());
-        // delay.delay_ms(1);
-        print!("{:?}\r\n", motion_manager.pose());
-        // delay.delay_ms(1);
-        // print!("{:?}\r\n", desired.to_wheel_velocities());
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);

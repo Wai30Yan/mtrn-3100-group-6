@@ -1,27 +1,26 @@
-use core::intrinsics::{black_box, breakpoint};
-use core::todo;
+use core::matches;
 
 use crate::na::ComplexField;
-use crate::{DT, print, state_observer};
-use na::{Isometry, Isometry2, Rotation2, Translation2};
+use crate::{DT, state_observer};
+use na::{Isometry, Isometry2, Rotation2, Translation2, UnitComplex};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Motion {
+    #[default]
     Idle,
-    Pivot {
-        rotation: Rotation2<f32>,
-    },
-    Pose {
-        pose: Isometry2<f32>,
-    },
+    // Drive in a straight line towards final_position
     Line {
         final_position: Translation2<f32>,
         final_speed: f32,
     },
+    // Drive in a circular arc towards final_position
     Arc {
-        centre: Translation2<f32>,
-        radius: f32,
+        final_pose: Isometry2<f32>,
         final_speed: f32,
+    },
+    // Rotate in place towards rotation
+    Pivot {
+        rotation: Rotation2<f32>,
     },
 }
 
@@ -40,6 +39,7 @@ impl ChassisSpeeds {
     }
 }
 
+#[derive(Default)]
 pub struct MotionManager {
     target: Motion,
     current_pose: Isometry2<f32>,
@@ -54,64 +54,18 @@ const MAX_ACCELERATION: f32 = 0.10;
 const MAX_ANGULAR: f32 = 2.0;
 const OVERSHOOT_GAIN: f32 = 0.2;
 
-const GAMMA_GAIN: f32 = 0.3;
-const B_GAIN: f32 = 20.0;
-
-const LINEAR_TOLERANCE: f32 = 0.03;
-const ANGULAR_TOLERANCE: f32 = 0.03;
 const EPSILON: f32 = 0.005;
 
 impl MotionManager {
-    pub fn new() -> Self {
-        Self {
-            target: Motion::Idle,
-            current_pose: Isometry::identity(),
-            current_speed: 0.0,
-        }
-    }
-
     pub fn update(&mut self, observed_pose: Isometry2<f32>) -> ChassisSpeeds {
         match self.target {
             Motion::Idle => ChassisSpeeds::default(),
-            Motion::Pivot { rotation } => {
-                self.current_pose.rotation = rotation.into();
-                self.current_speed = 0.0;
-
-                let error = (rotation / observed_pose.rotation).angle();
-
-                if error.abs() <= EPSILON {
-                    self.target = Motion::Idle;
-                }
-
-                ChassisSpeeds {
-                    vx: 0.0,
-                    omega: (BASIC_ANGULAR_GAIN * error).clamp_magnitude(MAX_ANGULAR),
-                }
-            }
-            Motion::Pose { pose } => {
-                self.current_pose = pose;
-                self.current_speed = 0.0;
-
-                let error = observed_pose.inv_mul(&pose);
-
-                if error.translation.vector.norm() <= LINEAR_TOLERANCE
-                    && error.rotation.angle().abs() <= ANGULAR_TOLERANCE
-                {
-                    self.target = Motion::Idle;
-                }
-
-                ChassisSpeeds {
-                    vx: (BASIC_LINEAR_GAIN * error.translation.x).clamp_magnitude(MAX_VELOCITY),
-                    omega: (BASIC_ANGULAR_GAIN * error.rotation.angle())
-                        .clamp_magnitude(MAX_ANGULAR),
-                }
-            }
             Motion::Line {
                 final_position,
                 final_speed,
             } => {
                 let path_delta = final_position / self.current_pose.translation;
-                if path_delta.vector.norm() <= LINEAR_TOLERANCE {
+                if path_delta.vector.norm() <= EPSILON {
                     self.current_pose.translation = final_position;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
@@ -135,10 +89,59 @@ impl MotionManager {
                 )
             }
             Motion::Arc {
-                centre,
-                radius,
+                final_pose,
                 final_speed,
-            } => todo!(),
+            } => {
+                let path_delta = final_pose / self.current_pose;
+                let mut turn_rate = 0.0;
+
+                if path_delta.translation.vector.norm() <= EPSILON {
+                    self.current_pose = final_pose;
+                    self.current_speed = final_speed;
+                    self.target = Motion::Idle;
+                } else {
+                    // Obtain the radius of rotation via the cord length
+                    let rad = path_delta.translation.vector.norm()
+                        / (2.0 * f32::sin(path_delta.rotation.angle().abs() / 2.0));
+
+                    // Drive forward
+                    self.current_speed = Self::update_speed(
+                        self.current_speed,
+                        final_speed,
+                        rad * path_delta.rotation.angle().abs(),
+                    );
+                    self.current_pose *= Translation2::new(self.current_speed * DT, 0.0);
+
+                    // Turn
+                    turn_rate = (self.current_speed / rad).copysign(path_delta.rotation.angle());
+                    self.current_pose
+                        .append_rotation_wrt_center_mut(&UnitComplex::new(turn_rate * DT));
+                }
+
+                Self::dumb_follow(
+                    observed_pose,
+                    self.current_pose,
+                    ChassisSpeeds {
+                        vx: self.current_speed,
+                        omega: turn_rate,
+                    },
+                )
+            }
+            Motion::Pivot { rotation } => {
+                self.current_pose.rotation = rotation.into();
+                self.current_speed = 0.0;
+
+                let error = (rotation / observed_pose.rotation).angle();
+
+                if error.abs() <= EPSILON {
+                    self.target = Motion::Idle;
+                }
+
+                ChassisSpeeds {
+                    vx: 0.0,
+                    omega: (BASIC_ANGULAR_GAIN * error).clamp_magnitude(MAX_ANGULAR),
+                }
+            }
         }
     }
 
@@ -147,11 +150,7 @@ impl MotionManager {
     }
 
     pub fn idle(&self) -> bool {
-        if let Motion::Idle = self.target {
-            true
-        } else {
-            false
-        }
+        matches!(self.target, Motion::Idle)
     }
 
     pub fn pose(&self) -> Isometry2<f32> {
@@ -174,26 +173,6 @@ impl MotionManager {
                 - (stopping_distance - remaining_distance) * OVERSHOOT_GAIN
         } else {
             (current_speed + MAX_ACCELERATION * DT).clamp_magnitude(MAX_VELOCITY)
-        }
-    }
-
-    fn ramsete(
-        observed_pose: Isometry2<f32>,
-        desired_pose: Isometry2<f32>,
-        desired_speeds: ChassisSpeeds,
-    ) -> ChassisSpeeds {
-        let error = observed_pose.inv_mul(&desired_pose);
-        let k =
-            2.0 * GAMMA_GAIN * f32::hypot(desired_speeds.omega, B_GAIN.sqrt() * desired_speeds.vx);
-
-        ChassisSpeeds {
-            vx: (desired_speeds.vx * error.rotation.cos_angle() + k * error.translation.x)
-                .clamp_magnitude(MAX_VELOCITY * 1.2),
-            omega: (desired_speeds.omega
-                + k * error.rotation.angle()
-                + (B_GAIN * desired_speeds.vx * error.rotation.sin_angle() * error.translation.y)
-                    / error.rotation.angle())
-            .clamp_magnitude(MAX_ANGULAR * 1.2),
         }
     }
 

@@ -1,9 +1,8 @@
 use core::intrinsics::{cosf32, sinf32};
 
-use cortex_m::asm::delay;
 use na::{Isometry2, SMatrix, SVector, Vector2};
 
-use crate::{DT, encoder::Encoder, imu::Imu, print};
+use crate::{DT, encoder::Encoder, imu::Imu};
 
 pub const R: f32 = 0.032;
 pub const B: f32 = 0.086;
@@ -27,8 +26,8 @@ pub struct StateObserver {
     prev_right: f32,
 }
 
-impl StateObserver {
-    pub fn new() -> Self {
+impl Default for StateObserver {
+    fn default() -> Self {
         Self {
             state: SVector::from_column_slice(&[
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0,
@@ -41,14 +40,10 @@ impl StateObserver {
             prev_right: 0.0,
         }
     }
+}
 
-    pub fn update(
-        &mut self,
-        trust_encoder: bool,
-        imu: &Imu,
-        encoder_left: &dyn Encoder,
-        encoder_right: &dyn Encoder,
-    ) {
+impl StateObserver {
+    pub fn update(&mut self, imu: &Imu, encoder_left: &dyn Encoder, encoder_right: &dyn Encoder) {
         /*
          * We are not using the standard formula of the Kalman Filter for the
          * update step as we do not have a model of the system just
@@ -103,12 +98,11 @@ impl StateObserver {
             let mut upper = q.fixed_view_mut::<9, 9>(0, 0);
             upper += self.covar;
 
-            let encoder_mul = if trust_encoder { 1.0 } else { 1_000_000.0 };
             // TODO: set correct covars
             q.fixed_view_mut::<6, 6>(9, 9)
                 .set_diagonal(&SVector::from_column_slice(&[
-                    ENCODER_COVAR * encoder_mul,
-                    ENCODER_COVAR * encoder_mul,
+                    ENCODER_COVAR,
+                    ENCODER_COVAR,
                     0.01,
                     IMU_COVAR * 1_000_000.0,
                     IMU_COVAR * 1_000_000.0,

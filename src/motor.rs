@@ -3,8 +3,6 @@ use stm32g4xx_hal::{
     hal_02::PwmPin,
 };
 
-use crate::print;
-
 pub struct Motor<'a> {
     pwm: &'a mut dyn PwmPin<Duty = u16>,
     dir: AnyPin<Output<PushPull>>,

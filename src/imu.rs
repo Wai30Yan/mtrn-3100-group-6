@@ -1,7 +1,5 @@
 use core::f32;
 
-use cortex_m::asm::delay;
-
 use crate::{I2cBus, print};
 
 pub struct Imu<'a> {

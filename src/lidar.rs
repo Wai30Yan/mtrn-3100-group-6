@@ -252,16 +252,13 @@ impl<'a> Lidar<'a> {
     }
 
     pub fn set_scaling(&mut self, scaling: u8) {
-        if scaling < 1 || scaling > 3 {
+        if !(1..=3).contains(&scaling) {
             panic!("Scaling must be between 1 and 3");
         }
-        self.write_reg16(
-            RANGE_SCALER,
-            SCALER_VALUES[scaling as usize].try_into().unwrap(),
-        );
+        self.write_reg16(RANGE_SCALER, SCALER_VALUES[scaling as usize]);
         self.write_reg(
             SYSRANGE_PART_TO_PART_RANGE_OFFSET,
-            self.ptp_offset / scaling as u8,
+            self.ptp_offset / scaling,
         );
         self.write_reg(SYSRANGE_CROSSTALK_VALID_HEIGHT, 20 / scaling);
 
