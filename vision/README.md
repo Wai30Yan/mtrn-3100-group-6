@@ -99,6 +99,19 @@ Paste it in place of the `todo!()` in
 `let solution: &[Motion] = todo!();` in `micromouse-rs/src/main.rs`, then
 flash.
 
+### Real photos to try
+
+`test_images/ed279/pic1..8.jpeg` are genuine lab captures **with the §4.2
+cylinders in place** (from Ed #279). The obstacle region in all of them is
+the 5×5 at NW cell `(0,3)`.
+
+```bash
+./.venv/bin/python maze_solver.py test_images/ed279/pic5.jpeg --start 8,6,N --goal 0,2
+```
+
+Note these captures show a maze split into several disconnected regions, so
+pick a start and goal in the same one — the tool tells you if you haven't.
+
 ## 4. §4.2 — obstacle course
 
 ```bash
@@ -117,6 +130,16 @@ flash.
 Emits **one** `&[Motion]` array for the whole run — start → course entry
 (Arcs) → through the obstacles (Pivot + Line) → exit → goal — plus a
 trajectory overlay, which is the 1-mark evidence for the occupancy map.
+
+Worked example on a real capture:
+
+```bash
+./.venv/bin/python obstacle_planner.py test_images/ed279/pic5.jpeg \
+    --region 0,3 --entry 0,3,E --exit 4,5 --start 6,2,N --goal 8,4
+```
+
+To find the entry/exit gaps for a photo you haven't seen before, run
+`maze_solver.py` on it first and read them off the wall overlay.
 
 ## 5. When it says NO PATH or UNRUNNABLE
 

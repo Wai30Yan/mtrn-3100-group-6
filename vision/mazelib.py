@@ -290,6 +290,72 @@ def _side_lines(cands, axis, wall_half=4, sign=1, min_support=6):
     return lines
 
 
+def _wall_evidence(warp, ratio=0.86):
+    """Per-pixel wall evidence by LOCAL contrast: a pixel is wall-ish if it is
+    clearly darker than the surrounding floor, or is a cyan clip. How a wall
+    looks depends entirely on how overhead the camera is - a near-vertical
+    view shows only its 1-2 px top edge at grey ~90, an oblique one shows a
+    15 px face at grey ~25 - so an absolute darkness cut cannot serve both."""
+    gray = cv2.cvtColor(warp, cv2.COLOR_BGR2GRAY)
+    bg = cv2.medianBlur(gray, 51).astype(np.float32)
+    hsv = cv2.cvtColor(warp, cv2.COLOR_BGR2HSV)
+    cyan = cv2.inRange(hsv, CYAN_LO, CYAN_HI) > 0
+    return ((gray.astype(np.float32) < ratio * bg) | cyan).astype(np.float32)
+
+
+def _fit_comb(profile, n, lo, hi, nominal_pitch):
+    """Best (offset, pitch) placing n+1 equally spaced lattice lines on the
+    peaks of a 1-D wall-evidence profile. Every interior wall sits on this
+    lattice, so the periodic signal is strong even when the outer boundary
+    wall itself is hard to isolate. Returns (offset, pitch, score)."""
+    best = None
+    for pitch in np.arange(nominal_pitch * 0.80, nominal_pitch * 1.20, 0.5):
+        for off in np.arange(lo, hi, 0.5):
+            xs = off + np.arange(n + 1) * pitch
+            if xs[0] < 0 or xs[-1] >= len(profile):
+                continue
+            s = 0.0
+            for j, x in enumerate(xs):
+                i = int(x)
+                v = float(profile[max(0, i - 3):i + 4].max())
+                # end teeth are the outer boundary walls, always present
+                s += v * (3.0 if j in (0, n) else 1.0)
+            if best is None or s > best[2]:
+                best = (float(off), float(pitch), float(s))
+    return best
+
+
+def _comb_quad(coarse, n, k, pad, size):
+    """Alternative refinement: fit the cell lattice directly. Returns a quad
+    in coarse-warp coordinates, or None."""
+    ev = _wall_evidence(coarse)
+    a0, a1 = pad + int(0.30 * size), pad + int(0.70 * size)
+    span = int(0.7 * k)
+    fx = _fit_comb(ev[a0:a1, :].mean(axis=0), n, pad - span, pad + span, k)
+    fy = _fit_comb(ev[:, a0:a1].mean(axis=1), n, pad - span, pad + span, k)
+    if fx is None or fy is None:
+        return None
+    ox, px_, _ = fx
+    oy, py_, _ = fy
+    return np.array([[ox, oy], [ox + n * px_, oy],
+                     [ox + n * px_, oy + n * py_], [ox, oy + n * py_]],
+                    dtype=np.float32)
+
+
+def _decisiveness(warp, n, k):
+    """How confidently the wall detector reads a rectified image:each edge score
+    should sit near 0 or 1, never near the 0.5 decision boundary. A
+    misregistered grid slices through walls and produces mushy middling
+    scores, so this is a self-check that needs no ground truth."""
+    try:
+        _g, scores = detect_walls(warp, n=n, k=k)
+    except Exception:
+        return -1.0
+    if not scores:
+        return -1.0
+    return float(np.mean([abs(e.score - 0.5) for e in scores]))
+
+
 def rectify(img, corners, n=9, k=K, refine=True, debug=False):
     """Warp the maze to an n*k square.
 
@@ -358,7 +424,8 @@ def rectify(img, corners, n=9, k=K, refine=True, debug=False):
                           for s, v in cand_lines.items()), file=sys.stderr)
         print(f"# chosen pairs: y={pair_y} x={pair_x}", file=sys.stderr)
     if pair_y is None or pair_x is None:
-        return coarse[pad:pad + size, pad:pad + size], H
+        return _pick_rectification(img, coarse, None, T @ H, dst, n, k, pad,
+                                   size, debug)
     lines = {"top": pair_y[0], "bottom": pair_y[1],
              "left": pair_x[0], "right": pair_x[1]}
 
@@ -377,13 +444,48 @@ def rectify(img, corners, n=9, k=K, refine=True, debug=False):
     # quad; otherwise keep the coarse warp.
     side_px = [np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)]
     if not all(0.55 * size < s < 1.10 * size for s in side_px):
-        return coarse[pad:pad + size, pad:pad + size], H
-    # Map refined corners back to original image coords, re-warp in one step.
-    Hinv = np.linalg.inv(T @ H)
-    orig = cv2.perspectiveTransform(quad.reshape(-1, 1, 2).astype(np.float64), Hinv)
-    H2 = cv2.getPerspectiveTransform(orig.reshape(4, 2).astype(np.float32), dst)
-    out = cv2.warpPerspective(img, H2, (size, size))
-    return out, H2
+        quad = None
+    return _pick_rectification(img, coarse, quad, T @ H, dst, n, k, pad, size,
+                               debug)
+
+
+def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
+    """Two independent refinements disagree in different situations: the
+    boundary-run fit is exact when the supplied quad already hugs the maze,
+    while the lattice-comb fit wins when the quad is the aluminium FRAME
+    (several cells oversized) and the boundary wall is a faint hairline.
+    Rather than guess which case we are in, rectify with each and keep the
+    one the wall detector reads most decisively."""
+    Hinv = np.linalg.inv(TH)
+    cands = []
+    cq = _comb_quad(coarse, n, k, pad, size)
+    if cq is not None:
+        cands.append(("lattice", cq))
+    if quad is not None and not cands:
+        cands.append(("boundary", quad))
+    cands.append(("coarse", np.array([[pad, pad], [pad + size, pad],
+                                      [pad + size, pad + size],
+                                      [pad, pad + size]], dtype=np.float32)))
+    best = None
+    for name, q in cands:
+        sides = [np.linalg.norm(q[i] - q[(i + 1) % 4]) for i in range(4)]
+        if not all(0.55 * size < s < 1.15 * size for s in sides):
+            continue
+        orig = cv2.perspectiveTransform(q.reshape(-1, 1, 2).astype(np.float64), Hinv)
+        H2 = cv2.getPerspectiveTransform(orig.reshape(4, 2).astype(np.float32), dst)
+        out = cv2.warpPerspective(img, H2, (size, size))
+        d = _decisiveness(out, n, k)
+        if debug:
+            import sys
+            print(f"#   {name:9s} decisiveness={d:.4f}", file=sys.stderr)
+        if best is None or d > best[0] + 0.02:
+            best = (d, out, H2, name)
+    if best is None:
+        return coarse[pad:pad + size, pad:pad + size], np.linalg.inv(Hinv)
+    if debug:
+        import sys
+        print(f"# chose {best[3]} rectification", file=sys.stderr)
+    return best[1], best[2]
 
 
 # ---------------------------------------------------------------------------

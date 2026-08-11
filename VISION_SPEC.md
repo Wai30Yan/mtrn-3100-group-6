@@ -99,6 +99,31 @@ Hard rules from the PDF that shape the design:
 - Maze wall sections and posts have gone missing from the lab (#219) — the
   arena may be short of parts when you test.
 
+### Real §4.2 captures (Ed #279 "Pics", 12 Aug) — 8 photos, now in the repo
+
+The first genuine obstacle-course captures: same fixed rig, **3680×2452**
+(and 1440×960 for two of them), with 4–5 cylinders standing in an open area.
+Stored in `vision/test_images/ed279/`. What they proved:
+
+- **The obstacle region is the 5×5 at NW cell (0,3)** — identical across all
+  eight, and it has no interior walls, matching #270.
+- **Cylinders measure 94–97 mm** against the 100 mm spec — detection is
+  accurate on real hardware, not just synthetics.
+- **They broke, and then fixed, the rectifier.** These frames are far more
+  overhead than the earlier photo, so a boundary wall shows only its 1–2 px
+  top edge at grey ≈90 instead of a 15 px face at grey ≈25. The old
+  refinement (which required a ≥6 px run darker than 60) skipped the real
+  boundary and locked onto an interior wall 1.5 cells in, shifting the whole
+  grid. Fixed by adding a **lattice-comb refinement**: instead of trying to
+  isolate the outer boundary wall, fit a comb of n+1 equally spaced lines to
+  *all* the maze's walls, which all sit on the same lattice. Both refinements
+  now run and the pipeline keeps whichever the wall detector reads more
+  decisively.
+- Ambiguous-edge counts are higher on these (10–23 vs 3) but the flags sit
+  **around the cylinders**, which partially darken a sampling strip. Since
+  §4.2 says that region has no interior walls, `obstacle_planner` already
+  ignores them.
+
 **Still unanswered** (asked by another student under #270, no staff reply
 yet): the maximum number of obstacles, and the minimum gap between them.
 Our planner already degrades gracefully — it retries with a smaller safety
