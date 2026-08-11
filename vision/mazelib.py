@@ -458,11 +458,11 @@ def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
     one the wall detector reads most decisively."""
     Hinv = np.linalg.inv(TH)
     cands = []
+    if quad is not None:
+        cands.append(("boundary", quad))
     cq = _comb_quad(coarse, n, k, pad, size)
     if cq is not None:
         cands.append(("lattice", cq))
-    if quad is not None and not cands:
-        cands.append(("boundary", quad))
     cands.append(("coarse", np.array([[pad, pad], [pad + size, pad],
                                       [pad + size, pad + size],
                                       [pad, pad + size]], dtype=np.float32)))
@@ -485,7 +485,53 @@ def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
     if debug:
         import sys
         print(f"# chose {best[3]} rectification", file=sys.stderr)
-    return best[1], best[2]
+    out, H2 = _micro_align(best[1], n, k, best[2], debug)
+    return out, H2
+
+
+def _micro_align(out, n, k, H2, debug=False, span=30):
+    """Final per-axis lattice snap, applied to WHATEVER refinement won: find
+    the (offset, scale) that puts the most wall evidence exactly ON the k-px
+    lattice lines, and resample. A refinement can be self-consistent yet off
+    by a fraction of a cell in phase AND a few percent in pitch (seen on a
+    real capture: x phase off ~23 px with ~2.5% pitch error - walls aligned
+    on one side of the image drifted off-strip on the other); offset+scale
+    removes exactly that failure mode for each axis independently."""
+    ev = _wall_evidence(out)
+    size = n * k
+    band = slice(int(0.15 * size), int(0.85 * size))
+    prof_x = ev[band, :].mean(axis=0)
+    prof_y = ev[:, band].mean(axis=1)
+
+    def best_fit(prof):
+        best = (0.0, 1.0, -1.0)
+        for scale in np.arange(0.96, 1.041, 0.005):
+            for o in range(-span, span + 1):
+                s = 0.0
+                for i in range(n + 1):
+                    key = int(round(i * k * scale)) + o
+                    lo, hi = max(0, key - 2), min(len(prof), key + 3)
+                    if lo < hi:
+                        s += float(prof[lo:hi].max())
+                if s > best[2]:
+                    best = (float(o), float(scale), s)
+        return best[:2]
+
+    (ox, sx), (oy, sy) = best_fit(prof_x), best_fit(prof_y)
+    if debug:
+        import sys
+        print(f"# micro-align: x offset={ox:.0f} scale={sx:.3f}  "
+              f"y offset={oy:.0f} scale={sy:.3f}", file=sys.stderr)
+    if ox == 0 and oy == 0 and sx == 1.0 and sy == 1.0:
+        return out, H2
+    # wall at ox + i*k*sx must land on i*k:  x' = (x - ox) / sx
+    M = np.array([[1 / sx, 0, -ox / sx],
+                  [0, 1 / sy, -oy / sy]], dtype=np.float32)
+    out2 = cv2.warpAffine(out, M, (size, size))
+    T2 = np.array([[1 / sx, 0, -ox / sx],
+                   [0, 1 / sy, -oy / sy],
+                   [0, 0, 1]], dtype=np.float64)
+    return out2, (T2 @ H2)
 
 
 # ---------------------------------------------------------------------------
