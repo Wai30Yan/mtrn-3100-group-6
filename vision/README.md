@@ -68,6 +68,13 @@ window opens showing the detected walls over the photo — **click any edge to
 toggle it** if it is visibly wrong, then press Enter. The command array
 prints and an overlay `*_overlay.png` is saved as the demonstrator evidence.
 
+If the photo contains §4.2 cylinders, they are detected automatically
+(magenta discs in the overlay, at their measured positions — pillars sit
+anywhere, not on the grid): any corridor a disc + robot radius threatens is
+walled off for planning, and the final geometric check also verifies the
+swept path against the discs themselves. Crossing *between* pillars
+off-lattice is `obstacle_planner.py`'s job, not this tool's.
+
 Useful flags:
 
 | flag | what it does |
