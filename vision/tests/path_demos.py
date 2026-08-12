@@ -10,7 +10,9 @@
 #  AI ASSISTANCE (assignment 5.1): written with the assistance of a generative
 #  AI (Anthropic Claude).
 # =============================================================================
+import copy
 import glob
+import math
 import os
 import random
 import sys
@@ -67,6 +69,10 @@ def main():
     photos = (sorted(glob.glob(os.path.join(HERE, "test_images", "*.jpg")))
               + sorted(glob.glob(os.path.join(HERE, "test_images", "ed279",
                                               "pic*.jpeg"))))
+    # The handheld oblique shot does not contain the maze's four corners, so
+    # no floor-plane homography can anchor it - any 9x9 map from it is
+    # meaningless. Kept in test_images/ as an out-of-scope stress file only.
+    photos = [p for p in photos if "phone_angle" not in p]
     rows = []
     for photo in photos:
         name = os.path.splitext(os.path.basename(photo))[0]
@@ -78,22 +84,40 @@ def main():
         warp, _ = ml.rectify(img, corners)
         grid, scores = ml.detect_walls(warp)
         # These demos exercise 4.1-style solving; the real 4.1 maze has no
-        # cylinders, but some test photos do (4.2 setups). Block any cell
-        # holding a cylinder so no demo path drives through one.
+        # cylinders, but some test photos do (4.2 setups). Cylinders sit at
+        # arbitrary measured positions, not cell centres — so instead of
+        # blocking the one cell under the centre, wall off every CORRIDOR
+        # (centre-to-centre segment) the measured disc + robot radius
+        # threatens, on a planning copy. Verification below runs against the
+        # physical grid + the actual discs.
         cyls = ml.detect_cylinders(warp, (0, 0), grid.n)
-        for c in cyls:
-            r, cc = int(c.cy // ml.K), int(c.cx // ml.K)
-            if grid.in_bounds(r, cc):
-                grid.block(r, cc)
-        pairs, region_size = pick_pairs(grid)
+        plan = copy.deepcopy(grid)
+        threat_px = (75.0 + 5.0) / (ml.CELL_MM / ml.K)   # robot + margin, px
+        for r, cc, d in grid.interior_edges():
+            ax, ay = (cc + 0.5) * ml.K, (r + 0.5) * ml.K
+            bx = ax + (ml.K if d == ml.E else 0)
+            by = ay + (ml.K if d == ml.S else 0)
+            for cyl in cyls:
+                t = max(0.0, min(1.0, ((cyl.cx - ax) * (bx - ax)
+                                       + (cyl.cy - ay) * (by - ay)) / ml.K ** 2))
+                if math.hypot(cyl.cx - (ax + t * (bx - ax)),
+                              cyl.cy - (ay + t * (by - ay))) < cyl.r + threat_px:
+                    plan.add_wall(r, cc, d)
+        pairs, region_size = pick_pairs(plan)
         print(f"{name}: largest region {region_size} cells, "
               f"{len(pairs)} runs")
         tiles = []
         for i, (start, goal, cmds, path) in enumerate(pairs, 1):
             motions = ml.path_to_motions(path, anchor=start,
                                          start_heading=start[2])
-            ok, clear, msg = ml.check_motions(motions, grid, start, goal)
+            circles = [(*ml.px_to_world(cyl.cx, cyl.cy, start),
+                        cyl.r * ml.CELL_MM / ml.K / 1000.0) for cyl in cyls]
+            ok, clear, msg = ml.check_motions(motions, grid, start, goal,
+                                              circles=circles)
             vis = ml.render_overlay(warp, grid, None, path, start, goal)
+            for cyl in cyls:                 # the measured discs, as-detected
+                cv2.circle(vis, (int(cyl.cx), int(cyl.cy)), int(cyl.r),
+                           (255, 0, 255), 2)
             txt = (f"{name} run {i}: start {start[:2]} {ml.DIR_NAMES[start[2]]}"
                    f" -> goal {goal} | {len(cmds)} actions, "
                    f"{len(motions)} motions, clearance {clear:.0f} mm"

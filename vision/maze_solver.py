@@ -161,14 +161,14 @@ def main():
         print(f"# overlay: {out}", file=sys.stderr)
         raise SystemExit(f"UNRUNNABLE PATH: {msg}")
 
-    print("// paste in place of the todo!() in "
-          "micromouse-rs/src/main.rs: let solution: &[Motion] = ...")
+    print("// paste in place of the todo!()s in micromouse-rs/src/main.rs")
     print(f"// absolute world coords (m, rad); origin = power-on pose at "
           f"start cell {start[:2]} facing {ml.DIR_NAMES[start[2]]}, "
           f"+x = that heading, +y = left")
+    print(ml.format_initial_pose(start))
     print(f"// {len(motions)} motions, {commands.count('f')} cells; "
           f"min wall clearance {clearance:.0f} mm")
-    print(ml.format_motions(motions))
+    print("let solution: &[Motion] = " + ml.format_motions(motions) + ";")
     if args.flr:
         print(f'// legacy week-8 string: "{commands}"')
 
