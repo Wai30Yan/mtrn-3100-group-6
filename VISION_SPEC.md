@@ -177,10 +177,15 @@ polarity and a handheld camera.)
 ```rust
 enum Motion {
   Line  { final_position: Translation2<f32>, final_speed: f32 },  // straight
-  Arc   { final_position: Translation2<f32>, final_speed: f32 },  // circular
+  Arc   { final_pose: Isometry2<f32>, final_speed: f32 },         // circular
   Pivot { rotation: Rotation2<f32> },                             // in place
 }
 ```
+
+`Arc`'s `final_pose` (2026-08-12, per the firmware) carries the end
+position **and the exit tangent heading** — together with "tangent to the
+current heading at entry" this pins the arc geometry exactly, closing the
+old ambiguity about which circle the enum meant.
 
 The `Task` string interface was **demo-only** and is no longer the week-12
 path (`maze_solver.py --flr` still prints it, for eyeballing only).
@@ -230,12 +235,10 @@ Two things I still need from the robot side to finish this:
 
 1. **`TRAVEL_SPEED`** — the emitted arrays reference it by name; tell me the
    value/const you settle on (or I'll inline a number).
-2. Confirm `Motion::Arc`'s implicit geometry is "circle tangent to the
-   current heading through `final_position`" — that's what I assumed, and
-   it's what makes the arc unique given the enum has no radius/centre field —
-   and that `Pivot`'s `rotation` is read as an absolute target heading (if
-   the firmware treats it as a relative turn instead, say so: one-line change
-   here).
+2. Confirm `Pivot`'s `rotation` is read as an **absolute target heading**
+   (if the firmware treats it as a relative turn instead, say so: one-line
+   change here). *(The old Arc-geometry question is resolved: `final_pose`
+   carries the exit tangent explicitly — emitted since 2026-08-12.)*
 
 ## 5. Pipeline design
 
