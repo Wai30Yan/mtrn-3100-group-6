@@ -153,15 +153,20 @@ def eval_course(png, verbose=True):
         true_grid = grid_from_json(meta)
         circles = [(*ml.px_to_world(gx, gy, entry), 0.05) for gx, gy in gt]
         try:
-            pts, (fx, fy, fth) = ml.simulate_motions(motions)
+            pts, (fx, fy, fth) = ml.simulate_motions(
+                motions, start=(*ml.cell_to_world(entry[0], entry[1]),
+                                ml.heading_world(entry[2])))
             clear_m = min(
                 ml.min_wall_clearance(pts, ml.wall_segments_world(true_grid, entry)),
                 min((math.hypot(px - cx, py - cy) - r
                      for cx, cy, r in circles for px, py in pts), default=9.9))
             clear = clear_m * 1000.0 >= 75.0        # robot radius
             ex, ey = ml.cell_to_world(exit_cell[0], exit_cell[1], entry)
+            want_th = ml.heading_world(exit_dir if exit_dir is not None
+                                       else entry[2])
+            dth = math.degrees(fth - want_th)
             end_ok = (math.hypot(fx - ex, fy - ey) < ml.CELL_M / 2
-                      and abs((math.degrees(fth) + 180) % 360 - 180) < 1.0)
+                      and abs((dth + 180) % 360 - 180) < 1.0)
         except ValueError:
             clear, end_ok = False, False
     ok = (matched == len(gt) and extra == 0 and wps is not None

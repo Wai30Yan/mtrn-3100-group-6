@@ -8,8 +8,10 @@
 #
 #  Output pastes in place of the todo!() in:
 #      let solution: &[Motion] = todo!();      // micromouse-rs/src/main.rs
-#  Absolute world coordinates, metres/radians, origin = the robot's power-on
-#  pose (start cell centre, +x = start heading, +y = left). Turns are emitted
+#  Absolute world coordinates, metres/radians, in a frame fixed to the maze:
+#  origin = the maze's top-left corner, +x = east (image right), +y = north
+#  (image up; south is negative). The firmware seeds odometry with the
+#  emitted initial_pose before running the array. Turns are emitted
 #  as Motion::Arc (faster and more precise than pivoting, per the robot side);
 #  straight runs and same-sense arc pairs are combined. The emitted path is
 #  simulated and clearance-checked against the detected walls before printing.
@@ -170,9 +172,10 @@ def main():
         raise SystemExit(f"UNRUNNABLE PATH: {msg}")
 
     print("// paste in place of the todo!()s in micromouse-rs/src/main.rs")
-    print(f"// absolute world coords (m, rad); origin = power-on pose at "
-          f"start cell {start[:2]} facing {ml.DIR_NAMES[start[2]]}, "
-          f"+x = that heading, +y = left")
+    print(f"// absolute world coords (m, rad), maze frame: origin = maze "
+          f"top-left corner, +x = east/right, +y = north/up (down is "
+          f"negative); start = cell {start[:2]} facing "
+          f"{ml.DIR_NAMES[start[2]]}")
     print(ml.format_initial_pose(start))
     print(f"// {len(motions)} motions, {commands.count('f')} cells; "
           f"min wall clearance {clearance:.0f} mm")

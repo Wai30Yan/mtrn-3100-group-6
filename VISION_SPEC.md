@@ -187,12 +187,16 @@ path (`maze_solver.py --flr` still prints it, for eyeballing only).
 
 Conventions the emitters follow:
 
-- **Absolute coordinates**, metres and radians, in the robot's world frame:
-  origin = the power-on pose = the **maze start cell centre**, +x = the start
-  heading, +y = left, angles CCW-positive (matching `Rotation2`). This
-  matches `StateObserver`, which zero-initialises at power-on.
-  *If the robot's world frame is anchored differently, this is the one
-  assumption to correct — everything else follows from it.*
+- **Absolute coordinates**, metres and radians, in a frame **fixed to the
+  maze** (convention set by David, 2026-08-12): origin = the maze's
+  **top-left (NW) outer corner**, +x = east (image right), +y = north (image
+  up) — going right is positive, going down is negative — so every point in
+  the maze has x ∈ [0, 1.62] and y ∈ [−1.62, 0], and cell (r, c)'s centre is
+  `(0.18·(c+0.5), −0.18·(r+0.5))`. Angles CCW-positive with 0 = east
+  (matching `Rotation2`); a `Pivot`'s rotation is the **absolute** target
+  heading in this frame. `StateObserver` zero-initialises at power-on, so the
+  firmware **must seed odometry with the emitted `initial_pose`** before
+  executing `solution` — see below.
 - **Rotation is implicit** along `Line`/`Arc` (robot ends tangent to motion);
   `Pivot` is emitted only where the robot must turn on the spot.
 - **`Arc` for normal maze navigation** (faster and more precise): each 90°
@@ -213,24 +217,25 @@ non-zero and says why if not — so a pasted array has already been checked
 against the photo it came from.
 
 **`initial_pose`**: the tools also emit
-`let initial_pose: Isometry2<f32> = ...` for the firmware's second `todo!()`.
-Under the agreed frame (world origin = power-on pose at the start cell
-centre, +x = start heading) it is `Isometry2::identity()` **by construction**
-— the frame is defined by where the robot wakes up. If the firmware instead
-anchors its frame to the maze (which is what a non-trivial `initial_pose`
-implies), that is one flag's worth of change on the vision side, but the
-origin/axis convention has to come from the robot side — see question 2.
+`let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(x, y), θ);`
+for the firmware's second `todo!()` — the start cell's centre and start
+heading in the maze frame (e.g. start (2,0) facing S →
+`Isometry2::new(Vector2::new(0.0900, -0.4500), -1.5708)`). Since odometry
+wakes up at (0,0,0), the firmware must compose this in (offset its state, or
+transform targets by it) or every motion in `solution` is misinterpreted —
+this replaces the old "identity by construction" note from when the frame
+was anchored to the power-on pose.
 
-Two things I need from you to finish this:
+Two things I still need from the robot side to finish this:
 
 1. **`TRAVEL_SPEED`** — the emitted arrays reference it by name; tell me the
    value/const you settle on (or I'll inline a number).
-2. **Confirm the world-frame origin** above (power-on pose, making
-   `initial_pose` the identity — or a maze-fixed frame, in which case define
-   its origin and axes), and whether `Motion::Arc`'s implicit geometry is
-   "circle tangent to the current heading through `final_position`" — that's
-   what I assumed, and it's what makes the arc unique given the enum has no
-   radius/centre field.
+2. Confirm `Motion::Arc`'s implicit geometry is "circle tangent to the
+   current heading through `final_position`" — that's what I assumed, and
+   it's what makes the arc unique given the enum has no radius/centre field —
+   and that `Pivot`'s `rotation` is read as an absolute target heading (if
+   the firmware treats it as a relative turn instead, say so: one-line change
+   here).
 
 ## 5. Pipeline design
 

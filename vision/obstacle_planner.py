@@ -18,9 +18,11 @@
 #  as in normal maze navigation) -> through the obstacles (Pivot + Line, per
 #  the robot side) -> exit -> goal. Pastes in place of the todo!() in
 #      let solution: &[Motion] = todo!();      // micromouse-rs/src/main.rs
-#  Absolute world coordinates, metres/radians, origin = the robot's power-on
-#  pose (maze start cell centre, +x = start heading, +y = left). The exit gap
-#  side is read from the DETECTED walls, not guessed.
+#  Absolute world coordinates, metres/radians, in a frame fixed to the maze:
+#  origin = the maze's top-left corner, +x = east (image right), +y = north
+#  (image up; south is negative); firmware seeds odometry from the emitted
+#  initial_pose. The exit gap side is read from the DETECTED walls, not
+#  guessed.
 #
 #  AI ASSISTANCE (assignment 5.1): written with the assistance of a generative
 #  AI (Anthropic Claude), reviewed and tested on real and synthetic photos.
@@ -241,9 +243,10 @@ def main():
         raise SystemExit(f"UNRUNNABLE PATH: {msg}")
 
     print("// paste in place of the todo!()s in micromouse-rs/src/main.rs")
-    print(f"// absolute world coords (m, rad); origin = power-on pose at "
-          f"start cell {start[:2]} facing {ml.DIR_NAMES[start[2]]}, "
-          f"+x = that heading, +y = left")
+    print(f"// absolute world coords (m, rad), maze frame: origin = maze "
+          f"top-left corner, +x = east/right, +y = north/up (down is "
+          f"negative); start = cell {start[:2]} facing "
+          f"{ml.DIR_NAMES[start[2]]}")
     print(ml.format_initial_pose(start))
     print(f"// start -> course entry {(er, ec)} (Arcs) -> {len(cylinders)} "
           f"obstacles (Pivot+Line) -> exit {(xr, xc)} facing "
