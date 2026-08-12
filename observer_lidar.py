@@ -3,11 +3,11 @@
 import re
 
 h = """
-abs(wk + nx*(txf + lx*cos(ttf) - ly*sin(ttf)) + ny*(tyf + ly*cos(ttf) + lx*sin(ttf)))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf))
+abs(nx*(txf + lx*cos(ttf) - ly*sin(ttf)) - wk + ny*(tyf + ly*cos(ttf) + lx*sin(ttf)))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf))
 """
 
 hj = """
-[(nx*sign(wk + nx*(txf + lx*cos(ttf) - ly*sin(ttf)) + ny*(tyf + ly*cos(ttf) + lx*sin(ttf))))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf)), (ny*sign(wk + nx*(txf + lx*cos(ttf) - ly*sin(ttf)) + ny*(tyf + ly*cos(ttf) + lx*sin(ttf))))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf)), - (sign(wk + nx*(txf + lx*cos(ttf) - ly*sin(ttf)) + ny*(tyf + ly*cos(ttf) + lx*sin(ttf)))*(nx*(ly*cos(ttf) + lx*sin(ttf)) - ny*(lx*cos(ttf) - ly*sin(ttf))))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf)) - (abs(wk + nx*(txf + lx*cos(ttf) - ly*sin(ttf)) + ny*(tyf + ly*cos(ttf) + lx*sin(ttf)))*sign(nx*cos(lt + ttf) + ny*sin(lt + ttf))*(ny*cos(lt + ttf) - nx*sin(lt + ttf)))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf))^2]
+[(nx*sign(nx*(txf + lx*cos(ttf) - ly*sin(ttf)) - wk + ny*(tyf + ly*cos(ttf) + lx*sin(ttf))))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf)), (ny*sign(nx*(txf + lx*cos(ttf) - ly*sin(ttf)) - wk + ny*(tyf + ly*cos(ttf) + lx*sin(ttf))))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf)), - (sign(nx*(txf + lx*cos(ttf) - ly*sin(ttf)) - wk + ny*(tyf + ly*cos(ttf) + lx*sin(ttf)))*(nx*(ly*cos(ttf) + lx*sin(ttf)) - ny*(lx*cos(ttf) - ly*sin(ttf))))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf)) - (abs(nx*(txf + lx*cos(ttf) - ly*sin(ttf)) - wk + ny*(tyf + ly*cos(ttf) + lx*sin(ttf)))*sign(nx*cos(lt + ttf) + ny*sin(lt + ttf))*(ny*cos(lt + ttf) - nx*sin(lt + ttf)))/abs(nx*cos(lt + ttf) + ny*sin(lt + ttf))^2]
 """
 
 h = h.strip().replace("\n", ",\n")

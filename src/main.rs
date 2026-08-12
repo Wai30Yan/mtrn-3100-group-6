@@ -309,8 +309,10 @@ fn main() -> ! {
     let mut display = Display::new(RefCellDevice::new(&i2c));
     display.print("Hello World!\n");
 
-    let initial_pose: Isometry2<f32> = Isometry2::identity();
-    let solution: &[Motion] = &[];
+    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.090, -0.090), 0.0);
+    let solution: &[Motion] = &[
+        Motion::Line { final_position: Translation2::new(0.450, -0.090), final_speed: 0.0 }
+    ];
     let mut solution_step: usize = 0;
 
     let mut observer = StateObserver::new(initial_pose);
@@ -347,7 +349,7 @@ fn main() -> ! {
                 Isometry2::new(Vector2::new(0.012, 0.030), f32::consts::FRAC_PI_2),
             );
         }
-        /*if matches!(lidar_r.update(), nb::Result::Ok(()))
+        if matches!(lidar_r.update(), nb::Result::Ok(()))
             && let Some(dist) = lidar_r.distance()
         {
             observer.lidar_update(
@@ -359,7 +361,7 @@ fn main() -> ! {
             && let Some(dist) = lidar_f.distance()
         {
             observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
-        }*/
+        }
 
         if motion_manager.idle() && solution_step < solution.len() {
             motion_manager.set_target(solution[solution_step]);
@@ -374,9 +376,13 @@ fn main() -> ! {
 
         display.clear();
         let p = motion_manager.pose();
+        let a = observer.pose();
         display.print(&format!("{:?}\n", p.translation.vector[0]));
         display.print(&format!("{:?}\n", p.translation.vector[1]));
         display.print(&format!("{:?}\n", p.rotation.angle()));
+        display.print(&format!("{:?}\n", a.translation.vector[0]));
+        display.print(&format!("{:?}\n", a.translation.vector[1]));
+        display.print(&format!("{:?}\n", a.rotation.angle()));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
