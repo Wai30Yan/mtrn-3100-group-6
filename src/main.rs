@@ -90,6 +90,8 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
+const TRAVEL_SPEED: f32 = 1.0;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe { Peripherals::steal() }
@@ -304,23 +306,15 @@ fn main() -> ! {
     let mut lidar_r = Lidar::new(RefCellDevice::new(&i2c), lidar_r_en, LIDAR_ADDR_R);
     let mut lidar_f = Lidar::new(RefCellDevice::new(&i2c), lidar_f_en, LIDAR_ADDR_F);
 
-    let mut observer = StateObserver::default();
-
-    let mut motion_manager = MotionManager::default();
     let mut display = Display::new(RefCellDevice::new(&i2c));
     display.print("Hello World!\n");
 
-    let solution: &[Motion] = &[
-        Motion::Line {
-            final_position: Translation2::new(0.3, 0.0),
-            final_speed: 1.0,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.4, 0.1), f32::consts::FRAC_PI_2),
-            final_speed: 0.0,
-        },
-    ];
+    let initial_pose: Isometry2<f32> = Isometry2::identity();
+    let solution: &[Motion] = &[];
     let mut solution_step: usize = 0;
+
+    let mut observer = StateObserver::new(initial_pose);
+    let mut motion_manager = MotionManager::new(initial_pose);
 
     // Let the state observer settle
     for _ in 1..100 {

@@ -58,6 +58,14 @@ const OVERSHOOT_GAIN: f32 = 0.2;
 const EPSILON: f32 = 0.005;
 
 impl MotionManager {
+    pub fn new(pose: Isometry2<f32>) -> Self {
+        Self {
+            target: Default::default(),
+            current_pose: pose,
+            current_speed: 0.0,
+        }
+    }
+
     pub fn update(&mut self, observed_pose: Isometry2<f32>) -> ChassisSpeeds {
         match self.target {
             Motion::Idle => ChassisSpeeds::default(),

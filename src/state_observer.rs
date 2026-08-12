@@ -26,11 +26,22 @@ pub struct StateObserver {
     prev_right: f32,
 }
 
-impl Default for StateObserver {
-    fn default() -> Self {
+impl StateObserver {
+    pub fn new(pose: Isometry2<f32>) -> Self {
         Self {
             state: SVector::from_column_slice(&[
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.0,
+                pose.translation.x,
+                pose.translation.y,
+                pose.rotation.angle(),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.2,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
             ]),
             covar: SMatrix::from_diagonal(&SVector::from_column_slice(&[
                 0.0025, 0.0025, 0.04, 0.01, 0.01, 0.01, 0.04, 0.04, 0.04,
@@ -40,9 +51,7 @@ impl Default for StateObserver {
             prev_right: 0.0,
         }
     }
-}
 
-impl StateObserver {
     pub fn update(&mut self, imu: &Imu, encoder_left: &dyn Encoder, encoder_right: &dyn Encoder) {
         /*
          * We are not using the standard formula of the Kalman Filter for the
