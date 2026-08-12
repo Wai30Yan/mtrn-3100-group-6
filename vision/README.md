@@ -73,11 +73,22 @@ If the photo contains §4.2 cylinders, they are detected automatically
 anywhere, not on the grid). Their pixels are excluded from wall evidence
 (a dark pillar body on a lattice line otherwise reads as a phantom wall),
 and any corridor a disc + robot radius threatens is walled off for planning
-— drawn **orange** in the overlay, distinct from real (red) walls. The
-final geometric check also verifies the swept path against the discs
-themselves. Crossing *between* pillars off-lattice is
-`obstacle_planner.py`'s job, not this tool's — a NO PATH here with orange
-closures around the route usually means "use the obstacle planner".
+— drawn **orange** in the overlay, distinct from real (red) walls.
+
+**Hybrid mode (automatic).** When normal path finding cannot connect start
+and goal because the obstacle course is in the way, the tool switches by
+itself: it locates the 5×5 course (most cylinders, no interior walls),
+reads its gates off the detected walls, runs lattice legs up to the course,
+and plans the crossing continuously — occupancy grid, config-space
+dilation by robot radius + margin, A*, shortcutting, then a
+clearance-maximising refinement (the architecture from the Path Planning
+assignment). Every entry/exit gate pair is tried and each candidate is
+geometrically verified against the real walls and measured discs; the
+cheapest verified crossing wins and one combined `&[Motion]` array is
+printed. `--margin` (default 5 mm beyond the 75 mm robot radius) loosens
+the standard for very tight built courses. Verified on all 8 ed279 lab
+captures. `obstacle_planner.py` remains the explicit-flags version of the
+same machinery for when the demonstrator dictates region/entry/exit.
 
 Useful flags:
 

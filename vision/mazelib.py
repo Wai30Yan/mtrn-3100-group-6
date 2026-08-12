@@ -16,6 +16,7 @@
 #  AI ASSISTANCE (assignment 5.1): written with the assistance of a generative
 #  AI (Anthropic Claude), reviewed and tested on real lab-camera photos.
 # =============================================================================
+import copy
 import json
 import math
 import os
@@ -970,6 +971,9 @@ def detect_cylinders(warp, region, region_cells=5, k=K, lean_gain=0.055):
     cores = (dt > 18).astype(np.uint8)
     ncc, lab = cv2.connectedComponents(cores)
     centre = warp.shape[0] / 2
+    n_img = warp.shape[0] // k
+    corners_cells = {(0, 0), (0, n_img - 1), (n_img - 1, 0),
+                     (n_img - 1, n_img - 1)}
     out = []
     for i in range(1, ncc):
         ys, xs = np.nonzero(lab == i)
@@ -978,12 +982,156 @@ def detect_cylinders(warp, region, region_cells=5, k=K, lean_gain=0.055):
             continue
         j = int(np.argmax(dt[ys, xs]))
         cx, cy = float(xs[j]), float(ys[j])
+        # the dark chamfer corner plates read as thick blobs too - and a
+        # pillar can never physically be in a chamfered corner cell
+        if (int((cy + y0) // k), int((cx + x0) // k)) in corners_cells:
+            continue
         # blob = base disc + leaning body; pull the centre back toward the
         # camera axis by half the lean to land on the base
         lx = lean_gain * (cx + x0 - centre)
         ly = lean_gain * (cy + y0 - centre)
         out.append(Cylinder(cx - 0.5 * lx + x0, cy - 0.5 * ly + y0, rad))
     return out
+
+
+def find_course_region(grid, cylinders, region_cells=5, k=K):
+    """NW cell of the region_cells-square block that best matches the
+    obstacle course: contains the most detected cylinder centres, ties
+    broken by fewest detected interior walls (the course has none)."""
+    if not cylinders:
+        return None
+    best = None
+    for r0 in range(grid.n - region_cells + 1):
+        for c0 in range(grid.n - region_cells + 1):
+            inside = sum(1 for cy in cylinders
+                         if r0 <= cy.cy // k < r0 + region_cells
+                         and c0 <= cy.cx // k < c0 + region_cells)
+            walls = sum(1 for r in range(r0, r0 + region_cells)
+                        for c in range(c0, c0 + region_cells)
+                        for d in (S, E)
+                        if r0 <= r + DR[d] < r0 + region_cells
+                        and c0 <= c + DC[d] < c0 + region_cells
+                        and grid.has_wall(r, c, d))
+            key = (inside, -walls)
+            if best is None or key > best[0]:
+                best = (key, (r0, c0))
+    return best[1]
+
+
+def course_gates(grid, region, region_cells=5):
+    """Open boundary edges of the course as (cell_r, cell_c, open_side):
+    course cells whose detected boundary side leads to an in-bounds,
+    unblocked cell outside the region."""
+    r0, c0 = region
+    gates = []
+    for i in range(region_cells):
+        for side, (rr, cc) in {N: (r0, c0 + i),
+                               S: (r0 + region_cells - 1, c0 + i),
+                               W: (r0 + i, c0),
+                               E: (r0 + i, c0 + region_cells - 1)}.items():
+            r2, c2 = rr + DR[side], cc + DC[side]
+            if grid.in_bounds(r2, c2) and not grid.blocked[r2, c2] \
+                    and not grid.has_wall(rr, cc, side):
+                gates.append((rr, cc, side))
+    return gates
+
+
+def solve_hybrid(grid, cylinders, start, goal, region=None, region_cells=5,
+                 k=K, r_turn=0.09, margin_mm=5.0, turn_cost=1.0):
+    """Normal lattice navigation stitched with a continuous crossing of the
+    obstacle course (occupancy-grid A*, config-space dilation — the Path
+    Planning assignment architecture), gates discovered automatically.
+
+    Seals the course off the lattice, then for every (entry gate, exit gate)
+    pair: lattice leg to the entry, plan_course through the pillars, lattice
+    leg from the exit — each candidate geometrically verified against the
+    physical walls + measured discs; the cheapest verified one wins.
+    Returns (motions, info dict) or (None, reason)."""
+    region = region if region is not None else find_course_region(grid, cylinders)
+    if region is None:
+        return None, "no cylinders detected - nothing to cross"
+    r0, c0 = region
+
+    def inside(r, c):
+        return r0 <= r < r0 + region_cells and c0 <= c < c0 + region_cells
+
+    if inside(*start[:2]) or inside(*goal):
+        return None, ("start or goal is inside the obstacle course - use "
+                      "obstacle_planner.py with explicit gates")
+    cyl_in = [cy for cy in cylinders
+              if inside(int(cy.cy // k), int(cy.cx // k))]
+    cyl_out = [cy for cy in cylinders if cy not in cyl_in]
+    lat = wall_off_cylinders(copy.deepcopy(grid), cyl_out)
+    for r in range(r0, r0 + region_cells):
+        for c in range(c0, c0 + region_cells):
+            lat.block(r, c)
+    # physical map for verification: course interior is obstacles, not walls
+    phys = copy.deepcopy(grid)
+    for r in range(r0, r0 + region_cells):
+        for c in range(c0, c0 + region_cells):
+            for d in (S, E):
+                if inside(r + DR[d], c + DC[d]):
+                    phys.remove_wall(r, c, d)
+    gates = course_gates(grid, region, region_cells)
+    if len(gates) < 2:
+        return None, (f"only {len(gates)} open gate(s) detected on the "
+                      f"course boundary - check the wall overlay")
+    best = None
+    for er, ec, eside in gates:
+        pre = (er + DR[eside], ec + DC[eside])
+        try:
+            leg1, path1 = solve(lat, start, pre, turn_cost=turn_cost)
+        except ValueError:
+            continue
+        if leg1 is None:
+            continue
+        for xr, xc, xside in gates:
+            if (xr, xc, xside) == (er, ec, eside):
+                continue
+            outc = (xr + DR[xside], xc + DC[xside])
+            try:
+                leg2, path2 = solve(lat, (*outc, xside), goal,
+                                    turn_cost=turn_cost)
+            except ValueError:
+                continue
+            if leg2 is None:
+                continue
+            wps, _, _ = plan_course(grid, cyl_in, region,
+                                    (er, ec, OPP[eside]), (xr, xc),
+                                    region_cells, k, exit_dir=xside,
+                                    margin_floor_mm=margin_mm)
+            if wps is None:
+                continue
+            try:
+                # leg1 ends at the pre-gate cell centre; the course polyline
+                # owns the whole crossing from there to the post-gate cell
+                # centre; leg2 continues from it.
+                motions = path_to_motions(path1, anchor=start,
+                                          start_heading=start[2],
+                                          r_turn=r_turn)
+                motions += course_to_motions(wps, anchor=start,
+                                             exit_dir=xside)
+                motions += path_to_motions(path2, anchor=start,
+                                           start_heading=xside,
+                                           r_turn=r_turn)
+            except ValueError:
+                continue
+            ok, clear, _msg = check_motions(
+                motions, phys, start, goal,
+                circles=cylinders_to_circles(cylinders), margin_mm=margin_mm)
+            if not ok:
+                continue
+            cost = len(path1) + len(path2) + len(wps)
+            if best is None or cost < best[0]:
+                best = (cost, motions,
+                        dict(region=region, entry=(er, ec, eside),
+                             exit=(xr, xc, xside), wps=wps, path1=path1,
+                             path2=path2, clearance=clear))
+    if best is None:
+        return None, ("no verified route through the course between any "
+                      "gate pair (a tight course may need "
+                      "obstacle_planner.py with --margin 2)")
+    return best[1], best[2]
 
 
 def wall_off_cylinders(grid, cylinders, k=K, clear_mm=80.0):
@@ -1017,90 +1165,124 @@ def cylinders_to_circles(cylinders, k=K):
 def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
                 k=K, robot_radius_mm=75.0, margin_mm=None, exit_dir=None,
                 margin_floor_mm=2.0):
-    """Occupancy-grid A* through the obstacle region, then line-of-sight
-    shortcutting. entry = (r, c, dir of travel INTO the region), exit_cell =
-    (r, c), exit_dir = the boundary side the exit gap is on (a corner exit
-    cell touches TWO boundary sides; opening both would erase a real wall
-    from the occupancy grid). Works in rectified px (1 px = CELL_MM / k mm).
+    """Continuous crossing of the obstacle course: occupancy-grid A* +
+    shortcutting + clearance refinement, planned over the region PADDED BY
+    ONE CELL of the detected maze - from the centre of the cell BEFORE the
+    entry gate, through the gate, between the cylinders, out the exit gate,
+    to the centre of the cell BEYOND it. Making the gate transits part of
+    the optimisation (instead of pinning the polyline to gate-cell centres
+    afterwards) is worth 3-5 mm of clearance exactly where a tight course
+    can least afford losing it.
+
+    entry = (r, c, dir of travel INTO the region); exit_dir = the boundary
+    side of exit_cell the robot leaves through (required). grid = the
+    detected Grid (ring-cell walls come from it; course-interior edges are
+    ignored - obstacles replace walls there; other detected gates on the
+    course boundary are closed so the route uses the designated ones).
 
     margin_mm=None tries a graduated safety margin (25 -> 15 -> 8 ->
-    margin_floor_mm): randomly-placed cylinders can leave gaps barely wider
-    than the robot, so prefer the safest route that exists rather than
-    failing outright. The floor must match the margin check_motions will
-    verify with — a route below the checker's margin is planned only to be
-    rejected. Returns (waypoints_px, occupancy_debug_image_mask)."""
+    margin_floor_mm); the floor must match the margin check_motions will
+    verify with. Returns (waypoints_px_absolute, blocked_window_mask,
+    window_origin_px)."""
+    if exit_dir is None:
+        raise ValueError("plan_course needs exit_dir")
     if margin_mm is None:
-        blocked = None
+        blocked, origin = None, (0, 0)
         ladder = [m for m in (25.0, 15.0, 8.0) if m > margin_floor_mm]
         for m in ladder + [float(margin_floor_mm)]:
-            wps, blocked = plan_course(grid, cylinders, region, entry,
-                                       exit_cell, region_cells, k,
-                                       robot_radius_mm, m, exit_dir)
+            wps, blocked, origin = plan_course(
+                grid, cylinders, region, entry, exit_cell, region_cells, k,
+                robot_radius_mm, m, exit_dir)
             if wps is not None:
                 if m < 25.0:
                     import sys
                     print(f"# note: route needs reduced safety margin {m} mm",
                           file=sys.stderr)
-                return wps, blocked
-        return None, blocked
+                return wps, blocked, origin
+        return None, blocked, origin
     r0, c0 = region
-    x0, y0 = c0 * k, r0 * k
-    size = region_cells * k
+    er, ec, ed = entry
+    xr, xc = exit_cell
+    pre = (er - DR[ed], ec - DC[ed])
+    out = (xr + DR[exit_dir], xc + DC[exit_dir])
+    wr0, wc0 = max(0, r0 - 1), max(0, c0 - 1)
+    wr1 = min(grid.n, r0 + region_cells + 1)
+    wc1 = min(grid.n, c0 + region_cells + 1)
+    wx0, wy0 = wc0 * k, wr0 * k
+    W, H = (wc1 - wc0) * k, (wr1 - wr0) * k
     mm_per_px = CELL_MM / k
     inflate_px = int(round((robot_radius_mm + margin_mm) / mm_per_px))
 
-    occ = np.zeros((size, size), dtype=np.uint8)
+    occ = np.zeros((H, W), dtype=np.uint8)
     for cyl in cylinders:
-        cv2.circle(occ, (int(cyl.cx - x0), int(cyl.cy - y0)),
+        cv2.circle(occ, (int(cyl.cx - wx0), int(cyl.cy - wy0)),
                    int(cyl.r + 10.0 / mm_per_px), 255, -1)
-    # Region boundary walls (the course keeps its outer walls; interior walls
-    # are removed in the obstacle area). Entry/exit gaps stay open.
-    er, ec, ed = entry
-    xr, xc = exit_cell
-    # The course keeps its outer boundary walls; the only gaps are the entry
-    # cell's entry side (the robot crosses it travelling with heading `ed`,
-    # so it enters through the OPP[ed] side) and the exit cell's boundary side.
-    wall_t = int(6 / mm_per_px)
-    for i in range(region_cells):
-        cells = {
-            N: (r0, c0 + i), S: (r0 + region_cells - 1, c0 + i),
-            W: (r0 + i, c0), E: (r0 + i, c0 + region_cells - 1),
-        }
-        for side, (rr, cc) in cells.items():
-            is_gap = ((rr, cc) == (er, ec) and side == OPP[ed]) or \
-                     ((rr, cc) == (xr, xc)
-                      and (exit_dir is None or side == exit_dir))
-            if is_gap:
+
+    def in_region(r, c):
+        return r0 <= r < r0 + region_cells and c0 <= c < c0 + region_cells
+
+    ht = max(2, int(round(3 / mm_per_px)))       # half wall thickness in px
+    entry_gate = (er, ec, OPP[ed])               # boundary side robot enters
+    exit_gate = (xr, xc, exit_dir)
+
+    def draw_edge(r, c, d):
+        if d == S:
+            y = (r + 1 - wr0) * k
+            occ[max(0, y - ht):y + ht, (c - wc0) * k:(c + 1 - wc0) * k] = 255
+        elif d == N:
+            y = (r - wr0) * k
+            occ[max(0, y - ht):y + ht, (c - wc0) * k:(c + 1 - wc0) * k] = 255
+        elif d == E:
+            x = (c + 1 - wc0) * k
+            occ[(r - wr0) * k:(r + 1 - wr0) * k, max(0, x - ht):x + ht] = 255
+        else:
+            x = (c - wc0) * k
+            occ[(r - wr0) * k:(r + 1 - wr0) * k, max(0, x - ht):x + ht] = 255
+
+    for r in range(wr0, wr1):
+        for c in range(wc0, wc1):
+            if grid.blocked[r, c]:               # chamfer plates in the ring
+                occ[(r - wr0) * k:(r + 1 - wr0) * k,
+                    (c - wc0) * k:(c + 1 - wc0) * k] = 255
                 continue
-            if side == N:
-                occ[0:wall_t, i * k:(i + 1) * k] = 255
-            elif side == S:
-                occ[size - wall_t:size, i * k:(i + 1) * k] = 255
-            elif side == W:
-                occ[i * k:(i + 1) * k, 0:wall_t] = 255
-            elif side == E:
-                occ[i * k:(i + 1) * k, size - wall_t:size] = 255
+            for d in range(4):
+                r2, c2 = r + DR[d], c + DC[d]
+                if in_region(r, c) and in_region(r2, c2):
+                    continue                     # obstacles replace walls
+                on_boundary = in_region(r, c) != in_region(r2, c2) \
+                    and grid.in_bounds(r2, c2)
+                if (r, c, d) in (entry_gate, exit_gate) or \
+                        (in_region(r2, c2) and (r2, c2, OPP[d])
+                         in (entry_gate, exit_gate)):
+                    continue                     # the designated gates
+                if grid.has_wall(r, c, d) or on_boundary:
+                    draw_edge(r, c, d)           # real wall, or a non-
+                                                 # designated course gap
     blocked = cv2.dilate(occ, cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (2 * inflate_px + 1, 2 * inflate_px + 1))) > 0
 
     def cell_centre_px(r, c):
-        return (int((c + 0.5) * k) - x0, int((r + 0.5) * k) - y0)
+        return (int((c + 0.5) * k) - wx0, int((r + 0.5) * k) - wy0)
 
-    start_px = cell_centre_px(er, ec)
-    goal_px = cell_centre_px(xr, xc)
-    step = max(4, int(20.0 / mm_per_px))   # ~20 mm planning resolution
+    start_px = cell_centre_px(*pre)
+    goal_px = cell_centre_px(*out)
+    # ~10 mm planning resolution: a tight course leaves free channels barely
+    # ~15 mm wide in config space - a 20 mm grid misses them by luck of
+    # where the nodes fall. The grid is still tiny.
+    step = max(3, int(10.0 / mm_per_px))
 
     def to_node(p):
         return (int(round(p[0] / step)), int(round(p[1] / step)))
 
     def node_free(nx, ny):
         x, y = nx * step, ny * step
-        return 0 <= x < size and 0 <= y < size and not blocked[y, x]
+        return 0 <= x < W and 0 <= y < H and not blocked[y, x]
 
     def nearest_free(node):
-        """Blocked entry/exit centre (a cylinder can sit close to it): snap to
-        the nearest free node, but never beyond the cell itself - planning
-        from a neighbouring cell would silently redefine where the robot is."""
+        """Blocked start/goal centre (a cylinder or wall shadow can sit close
+        to it): snap to the nearest free node, but never beyond the cell
+        itself - planning from a neighbouring cell would silently redefine
+        where the robot is."""
         if node_free(*node):
             return node
         best, bd = None, None
@@ -1117,7 +1299,7 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
     start_n = nearest_free(to_node(start_px))
     goal_n = nearest_free(to_node(goal_px))
     if start_n is None or goal_n is None:
-        return None, blocked
+        return None, blocked, (wx0, wy0)
     # A* 8-connected, corner cutting forbidden
     dist = {start_n: 0.0}
     prev = {}
@@ -1145,7 +1327,7 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
                 h = ((nn[0] - goal_n[0]) ** 2 + (nn[1] - goal_n[1]) ** 2) ** 0.5
                 heappush(q, (ng + h, nn))
     if not found:
-        return None, blocked
+        return None, blocked, (wx0, wy0)
     path = [goal_n]
     while path[-1] in prev:
         path.append(prev[path[-1]])
@@ -1157,7 +1339,7 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
         length = max(abs(bx - ax), abs(by - ay))
         for t in np.linspace(0, 1, max(2, int(length / 2))):
             x, y = int(round(ax + (bx - ax) * t)), int(round(ay + (by - ay) * t))
-            if blocked[min(y, size - 1), min(x, size - 1)]:
+            if blocked[min(y, H - 1), min(x, W - 1)]:
                 return False
         return True
 
@@ -1169,9 +1351,65 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
             j -= 1
         simple.append(path[j])
         i = j
-    wps = [(nx * step + x0, ny * step + y0) for nx, ny in simple]
-    return wps, blocked
+    loc = [(nx * step, ny * step) for nx, ny in simple]
 
+    # Clearance refinement: the shortcut hugs the inflation boundary, and
+    # the waypoints->motions conversion sheds a few more mm - enough to
+    # fail the final check in a tight course. Push each interior waypoint
+    # toward the local maximum of the obstacle distance field (config-space
+    # thinking, as in the path planning assignment) while keeping both
+    # adjacent segments free.
+    dt = cv2.distanceTransform((~blocked).astype(np.uint8), cv2.DIST_L2, 5)
+
+    def px_free_seg(a, b):
+        length = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+        for t in np.linspace(0, 1, max(2, int(length / 2))):
+            x = min(int(round(a[0] + (b[0] - a[0]) * t)), W - 1)
+            y = min(int(round(a[1] + (b[1] - a[1]) * t)), H - 1)
+            if blocked[y, x]:
+                return False
+        return True
+
+    def refine():
+        for idx in range(1, len(loc) - 1):
+            best = loc[idx]
+            best_d = dt[min(int(best[1]), H - 1), min(int(best[0]), W - 1)]
+            for dx in range(-8, 9, 2):
+                for dy in range(-8, 9, 2):
+                    cand = (loc[idx][0] + dx, loc[idx][1] + dy)
+                    if not (0 <= cand[0] < W and 0 <= cand[1] < H):
+                        continue
+                    d = dt[int(cand[1]), int(cand[0])]
+                    if d > best_d and px_free_seg(loc[idx - 1], cand) \
+                            and px_free_seg(cand, loc[idx + 1]):
+                        best, best_d = cand, d
+            loc[idx] = best
+
+    refine()
+    refine()
+    # Enforce >= MIN_LINE_M waypoint spacing HERE, where the inflation mask
+    # can arbitrate: course_to_motions must drop sub-40mm hops (the firmware
+    # cannot drive a Line shorter than its tolerance), and a blind drop
+    # there bridges a corner straight through the clearance the refinement
+    # just won. Removing a point is only allowed if the bridged segment
+    # still respects the full inflation.
+    min_gap = MIN_LINE_M * 1000.0 / mm_per_px
+    i = 1
+    while i < len(loc) - 1:
+        d_prev = math.hypot(loc[i][0] - loc[i - 1][0],
+                            loc[i][1] - loc[i - 1][1])
+        d_next = math.hypot(loc[i + 1][0] - loc[i][0],
+                            loc[i + 1][1] - loc[i][1])
+        if (d_prev < min_gap or d_next < min_gap) \
+                and px_free_seg(loc[i - 1], loc[i + 1]):
+            loc.pop(i)
+            i = max(1, i - 1)
+        else:
+            i += 1
+    refine()
+
+    wps = [(x + wx0, y + wy0) for x, y in loc]
+    return wps, blocked, (wx0, wy0)
 
 
 # ---------------------------------------------------------------------------

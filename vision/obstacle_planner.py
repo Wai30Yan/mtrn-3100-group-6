@@ -153,9 +153,9 @@ def main():
         for p in ml.save_masks(warp, base, cylinders=cylinders):
             print(f"# mask: {p}", file=sys.stderr)
 
-    wps_px, blocked = ml.plan_course(None, cylinders, region, entry, exit_cell,
-                                     args.region_cells, exit_dir=exit_dir,
-                                     margin_floor_mm=args.margin)
+    wps_px, blocked, worigin = ml.plan_course(
+        grid, cylinders, region, entry, exit_cell, args.region_cells,
+        exit_dir=exit_dir, margin_floor_mm=args.margin)
     if wps_px is None:
         raise SystemExit(
             "NO ROUTE through the obstacle course within the safety margin - "
@@ -169,7 +169,8 @@ def main():
     r0, c0 = region
     x0, y0 = c0 * ml.K, r0 * ml.K
     size = args.region_cells * ml.K
-    tint = vis[y0:y0 + size, x0:x0 + size]
+    wx0, wy0 = worigin
+    tint = vis[wy0:wy0 + blocked.shape[0], wx0:wx0 + blocked.shape[1]]
     tint[blocked] = (0.55 * tint[blocked] + np.array([0, 0, 110])).astype(np.uint8)
     for c in cylinders:
         cv2.circle(vis, (int(c.cx), int(c.cy)), int(c.r), (0, 255, 255), 2)
@@ -228,19 +229,16 @@ def main():
     print(f"# overlay: {out}", file=sys.stderr)
 
     # ---- one Motion array for the whole run --------------------------------
-    # leg 1: normal maze navigation (Arcs), ending inside the entry cell
-    # facing ed; path1 stops one cell short, so append the entry cell.
     try:
-        motions = ml.path_to_motions(list(path1) + [(er, ec)], anchor=start,
+        # leg 1 ends at the pre-gate cell centre; the course polyline owns
+        # the whole crossing (through both gates); leg 2 continues from the
+        # post-gate cell centre facing exit_dir.
+        motions = ml.path_to_motions(path1, anchor=start,
                                      start_heading=start[2],
                                      r_turn=args.turn_radius)
-        # course: Pivot + Line only, already in the same world frame
         motions += ml.course_to_motions(wps_px, anchor=start,
-                                        exit_dir=exit_dir,
-                                        entry_cell=(er, ec),
-                                        exit_cell=(xr, xc))
-        # leg 2: out of the exit cell and on to the goal, facing exit_dir
-        motions += ml.path_to_motions([(xr, xc)] + list(path2), anchor=start,
+                                        exit_dir=exit_dir)
+        motions += ml.path_to_motions(path2, anchor=start,
                                       start_heading=exit_dir,
                                       r_turn=args.turn_radius)
     except ValueError as e:

@@ -141,29 +141,29 @@ def eval_course(png, verbose=True):
     entry = tuple(meta["entry"])
     exit_cell = tuple(meta["exit"])
     exit_dir = ml.E
-    wps, _blocked = ml.plan_course(None, det, region, entry, exit_cell, rc,
-                                   exit_dir=exit_dir)
+    true_grid = grid_from_json(meta)
+    wps, _blocked, _origin = ml.plan_course(true_grid, det, region, entry,
+                                            exit_cell, rc, exit_dir=exit_dir)
     clear = end_ok = None
     if wps:
         # Validate what the ROBOT actually executes: the emitted Motion list,
         # simulated geometrically, against the TRUE walls and TRUE cylinders.
-        motions = ml.course_to_motions(wps, anchor=entry, exit_dir=exit_dir,
-                                       entry_cell=entry[:2],
-                                       exit_cell=exit_cell)
-        true_grid = grid_from_json(meta)
+        # The polyline runs pre-gate cell centre -> post-gate cell centre.
+        motions = ml.course_to_motions(wps, anchor=entry, exit_dir=exit_dir)
+        pre = (entry[0] - ml.DR[entry[2]], entry[1] - ml.DC[entry[2]])
+        post = (exit_cell[0] + ml.DR[exit_dir], exit_cell[1] + ml.DC[exit_dir])
         circles = [(*ml.px_to_world(gx, gy, entry), 0.05) for gx, gy in gt]
         try:
             pts, (fx, fy, fth) = ml.simulate_motions(
-                motions, start=(*ml.cell_to_world(entry[0], entry[1]),
+                motions, start=(*ml.cell_to_world(*pre),
                                 ml.heading_world(entry[2])))
             clear_m = min(
                 ml.min_wall_clearance(pts, ml.wall_segments_world(true_grid, entry)),
                 min((math.hypot(px - cx, py - cy) - r
                      for cx, cy, r in circles for px, py in pts), default=9.9))
             clear = clear_m * 1000.0 >= 75.0        # robot radius
-            ex, ey = ml.cell_to_world(exit_cell[0], exit_cell[1], entry)
-            want_th = ml.heading_world(exit_dir if exit_dir is not None
-                                       else entry[2])
+            ex, ey = ml.cell_to_world(*post)
+            want_th = ml.heading_world(exit_dir)
             dth = math.degrees(fth - want_th)
             end_ok = (math.hypot(fx - ex, fy - ey) < ml.CELL_M / 2
                       and abs((dth + 180) % 360 - 180) < 1.0)
