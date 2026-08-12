@@ -79,6 +79,9 @@ def main():
     ap.add_argument("--no-ui", action="store_true",
                     help="headless: no windows, skip interactive review")
     ap.add_argument("--out", default=None, help="overlay output path")
+    ap.add_argument("--save-masks", action="store_true",
+                    help="also save the binary colour-mask stages "
+                         "(*_mask_binary/walls/obstacles.png)")
     args = ap.parse_args()
 
     if args.turn_cost < 0:
@@ -112,6 +115,11 @@ def main():
         warp = np.ascontiguousarray(np.rot90(warp, k=(360 - args.rotate) // 90))
 
     grid, scores = ml.detect_walls(warp, n=args.n, chamfer=args.chamfer)
+
+    if args.save_masks:
+        base = os.path.splitext(args.out or image_path)[0]
+        for p in ml.save_masks(warp, base):
+            print(f"# mask: {p}", file=sys.stderr)
 
     if not args.no_ui:
         grid = ml.review_walls(warp, grid, scores)

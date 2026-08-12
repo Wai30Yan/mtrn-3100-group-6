@@ -57,6 +57,9 @@ def main():
     ap.add_argument("--corners", default="cache", choices=("cache", "auto", "click"))
     ap.add_argument("--no-ui", action="store_true")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--save-masks", action="store_true",
+                    help="also save the binary colour-mask stages "
+                         "(*_mask_binary/walls/obstacles.png)")
     args = ap.parse_args()
 
     if args.capture is not None:
@@ -133,6 +136,11 @@ def main():
     for c in cylinders:
         print(f"#   at ({c.cx:.0f},{c.cy:.0f}) px, r={c.r:.0f} px "
               f"(~{2 * c.r * ml.CELL_MM / ml.K:.0f} mm dia)", file=sys.stderr)
+
+    if args.save_masks:
+        base = os.path.splitext(args.out or image_path)[0]
+        for p in ml.save_masks(warp, base, cylinders=cylinders):
+            print(f"# mask: {p}", file=sys.stderr)
 
     wps_px, blocked = ml.plan_course(None, cylinders, region, entry, exit_cell,
                                      args.region_cells, exit_dir=exit_dir)
