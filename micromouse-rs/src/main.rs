@@ -443,7 +443,7 @@ fn main() -> ! {
             Read raw distances from LiDAR sensors
             Update Map
             -------------------------------------------- */
-        let front_dist   = lidar_f.distance();
+        let front_dist: Option<f32> = lidar_f.distance();
         let left_dist: Option<f32> = lidar_l.distance();
         let right_dist: Option<f32> = lidar_r.distance();
 
