@@ -1,8 +1,12 @@
-use core::intrinsics::{cosf32, sinf32};
+use core::{
+    f32,
+    intrinsics::{cosf32, powf32, roundf32, sinf32},
+    todo,
+};
 
-use na::{Isometry2, SMatrix, SVector, Vector2};
+use na::{Isometry2, SMatrix, SVector, Translation2, Vector2};
 
-use crate::{DT, encoder::Encoder, imu::Imu};
+use crate::{DT, encoder::Encoder, imu::Imu, print};
 
 pub const R: f32 = 0.032;
 pub const B: f32 = 0.086;
@@ -11,6 +15,11 @@ const IY: f32 = 0.020;
 
 const ENCODER_COVAR: f32 = 0.002;
 const IMU_COVAR: f32 = 0.0008; // * 1_000_000.0;
+const HIT_WINDOW_L: f32 = 0.030;
+const HIT_WINDOW_W: f32 = 0.020;
+
+// ~10mm
+const LIDAR_COVAR: f32 = 0.0001;
 
 pub struct StateObserver {
     // The state vector contains the translation, velocities, linear
@@ -125,6 +134,144 @@ impl StateObserver {
 
         self.covar = SMatrix::zeros();
         self.covar += covar.fixed_view(0, 0);
+    }
+
+    pub fn lidar_update(&mut self, distance: f32, pose: Isometry2<f32>) {
+        let hit = self.pose() * pose * Translation2::new(distance, 0.0);
+        // TODO: disqualify hits in certain zones (edge and obstacles)
+        let wall_x = roundf32(hit.translation.x / 0.180) * 0.180;
+        let wall_y = roundf32(hit.translation.y / 0.180) * 0.180;
+
+        let (wn, wd) = if (hit.translation.x - wall_x).abs() < HIT_WINDOW_W
+            && (hit.translation.y - wall_y).abs() > HIT_WINDOW_L
+        {
+            // Wall on x-axis
+            (Vector2::new(0.0, 1.0), wall_x)
+        } else if (hit.translation.y - wall_y).abs() < HIT_WINDOW_W
+            && (hit.translation.x - wall_x).abs() > HIT_WINDOW_L
+        {
+            // Wall on y-axis
+            (Vector2::new(1.0, 0.0), wall_y)
+        } else {
+            return;
+        };
+
+        let h = Self::h(self.state, pose, wn, wd);
+        print!("{:?}\r\n", self.state);
+        print!("{:?}\r\n", pose);
+        print!("{:?}\r\n", wn);
+        print!("{:?}\r\n", wd);
+        print!("\r\n");
+        let hj = Self::hj(self.state, pose, wn, wd);
+
+        let yk = distance - h;
+        let sk = (hj * self.covar * hj.transpose())[0] + LIDAR_COVAR;
+        let kk_p = self.covar * hj.transpose() / sk;
+        let kk = SVector::<f32, 12>::from_column_slice(&[
+            kk_p[0], kk_p[1], kk_p[2], kk_p[3], kk_p[4], kk_p[5], kk_p[6], kk_p[7], kk_p[8], 0.0,
+            0.0, 0.0,
+        ]);
+        let xk = self.state + kk * yk;
+        let pk = (SMatrix::identity() - kk_p * hj) * self.covar;
+
+        return;
+        self.state = xk;
+        self.covar = pk;
+    }
+
+    fn h(beta: SVector<f32, 12>, lp: Isometry2<f32>, wn: Vector2<f32>, wd: f32) -> f32 {
+        f32::abs(
+            -wd + wn[0]
+                * (beta[0] + lp.translation.x * cosf32(beta[2])
+                    - lp.translation.y * sinf32(beta[2]))
+                + wn[1]
+                    * (beta[1]
+                        + lp.translation.y * cosf32(beta[2])
+                        + lp.translation.x * sinf32(beta[2])),
+        ) / f32::abs(
+            wn[0] * cosf32(lp.rotation.angle() + beta[2])
+                + wn[1] * sinf32(lp.rotation.angle() + beta[2]),
+        )
+    }
+
+    fn hj(
+        beta: SVector<f32, 12>,
+        lp: Isometry2<f32>,
+        wn: Vector2<f32>,
+        wd: f32,
+    ) -> SMatrix<f32, 1, 9> {
+        SMatrix::from_column_slice(&[
+            (wn[0]
+                * f32::signum(
+                    wd + wn[0]
+                        * (beta[0] + lp.translation.x * cosf32(beta[2])
+                            - lp.translation.y * sinf32(beta[2]))
+                        + wn[1]
+                            * (beta[1]
+                                + lp.translation.y * cosf32(beta[2])
+                                + lp.translation.x * sinf32(beta[2])),
+                ))
+                / f32::abs(
+                    wn[0] * cosf32(lp.rotation.angle() + beta[2])
+                        + wn[1] * sinf32(lp.rotation.angle() + beta[2]),
+                ),
+            (wn[1]
+                * f32::signum(
+                    wd + wn[0]
+                        * (beta[0] + lp.translation.x * cosf32(beta[2])
+                            - lp.translation.y * sinf32(beta[2]))
+                        + wn[1]
+                            * (beta[1]
+                                + lp.translation.y * cosf32(beta[2])
+                                + lp.translation.x * sinf32(beta[2])),
+                ))
+                / f32::abs(
+                    wn[0] * cosf32(lp.rotation.angle() + beta[2])
+                        + wn[1] * sinf32(lp.rotation.angle() + beta[2]),
+                ),
+            -(f32::signum(
+                wd + wn[0]
+                    * (beta[0] + lp.translation.x * cosf32(beta[2])
+                        - lp.translation.y * sinf32(beta[2]))
+                    + wn[1]
+                        * (beta[1]
+                            + lp.translation.y * cosf32(beta[2])
+                            + lp.translation.x * sinf32(beta[2])),
+            ) * (wn[0]
+                * (lp.translation.y * cosf32(beta[2]) + lp.translation.x * sinf32(beta[2]))
+                - wn[1]
+                    * (lp.translation.x * cosf32(beta[2]) - lp.translation.y * sinf32(beta[2]))))
+                / f32::abs(
+                    wn[0] * cosf32(lp.rotation.angle() + beta[2])
+                        + wn[1] * sinf32(lp.rotation.angle() + beta[2]),
+                )
+                - (f32::abs(
+                    wd + wn[0]
+                        * (beta[0] + lp.translation.x * cosf32(beta[2])
+                            - lp.translation.y * sinf32(beta[2]))
+                        + wn[1]
+                            * (beta[1]
+                                + lp.translation.y * cosf32(beta[2])
+                                + lp.translation.x * sinf32(beta[2])),
+                ) * f32::signum(
+                    wn[0] * cosf32(lp.rotation.angle() + beta[2])
+                        + wn[1] * sinf32(lp.rotation.angle() + beta[2]),
+                ) * (wn[1] * cosf32(lp.rotation.angle() + beta[2])
+                    - wn[0] * sinf32(lp.rotation.angle() + beta[2])))
+                    / powf32(
+                        f32::abs(
+                            wn[0] * cosf32(lp.rotation.angle() + beta[2])
+                                + wn[1] * sinf32(lp.rotation.angle() + beta[2]),
+                        ),
+                        2.0,
+                    ),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ])
     }
 
     fn f(beta: SVector<f32, 12>) -> SVector<f32, 15> {

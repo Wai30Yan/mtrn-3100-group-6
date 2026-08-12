@@ -10,7 +10,7 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, panic::PanicInfo};
+use core::{cell::RefCell, f32, matches, panic::PanicInfo, todo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
@@ -337,11 +337,29 @@ fn main() -> ! {
         encoder_left.update();
         encoder_right.update();
 
-        lidar_l.update();
-        lidar_r.update();
-        lidar_f.update();
-
         observer.update(&imu, &encoder_left, &encoder_right);
+
+        if matches!(lidar_l.update(), nb::Result::Ok(()))
+            && let Some(dist) = lidar_l.distance()
+        {
+            observer.lidar_update(
+                dist,
+                Isometry2::new(Vector2::new(0.012, 0.030), f32::consts::FRAC_PI_2),
+            );
+        }
+        /*if matches!(lidar_r.update(), nb::Result::Ok(()))
+            && let Some(dist) = lidar_r.distance()
+        {
+            observer.lidar_update(
+                dist,
+                Isometry2::new(Vector2::new(0.012, -0.030), -f32::consts::FRAC_PI_2),
+            );
+        }
+        if matches!(lidar_f.update(), nb::Result::Ok(()))
+            && let Some(dist) = lidar_f.distance()
+        {
+            observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
+        }*/
 
         if motion_manager.idle() && solution_step < solution.len() {
             motion_manager.set_target(solution[solution_step]);
