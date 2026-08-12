@@ -72,31 +72,6 @@ def capture_frame(cam_index, width=1920, height=1080, warmup=10):
 # Corner selection
 # ---------------------------------------------------------------------------
 
-def _corner_cache_path(image_path):
-    return os.path.splitext(image_path)[0] + ".corners.json"
-
-
-def load_cached_corners(image_path, shape):
-    """Cached corners are only valid for the SAME image content: keyed by
-    shape + file mtime, so overwriting a photo (or a camera nudge producing a
-    new capture) invalidates the cache instead of silently reusing it."""
-    p = _corner_cache_path(image_path)
-    if os.path.exists(p) and os.path.exists(image_path):
-        d = json.load(open(p))
-        if d.get("shape") == list(shape[:2]) \
-                and d.get("mtime") == os.path.getmtime(image_path):
-            return np.array(d["corners"], dtype=np.float32)
-    return None
-
-
-def save_corners(image_path, shape, corners):
-    p = _corner_cache_path(image_path)
-    mtime = os.path.getmtime(image_path) if os.path.exists(image_path) else None
-    json.dump({"shape": list(shape[:2]), "mtime": mtime,
-               "corners": np.asarray(corners).tolist()},
-              open(p, "w"))
-
-
 def write_image(path, img):
     """cv2.imwrite that fails loudly - a demo-day 'overlay saved' message must
     never lie about evidence that wasn't written."""
@@ -121,9 +96,14 @@ def auto_corners(img):
     if not cnts:
         return None
     c = max(cnts, key=cv2.contourArea).reshape(-1, 2).astype(np.float64)
-    cx, cy = c.mean(axis=0)
-    w = c[:, 0].max() - c[:, 0].min()
-    h = c[:, 1].max() - c[:, 1].min()
+    # Robust extents (5th/95th percentile): a bystander's paper or shoe
+    # poking over the frame edge stretches the raw bbox, which shifts the
+    # side bands clean off the real edges (a real capture put the whole
+    # north band onto a sheet of paper).
+    rx0, rx1 = np.percentile(c[:, 0], [5, 95])
+    ry0, ry1 = np.percentile(c[:, 1], [5, 95])
+    cx, cy = (rx0 + rx1) / 2, (ry0 + ry1) / 2
+    w, h = rx1 - rx0, ry1 - ry0
     sides = {
         "W": c[(c[:, 0] < cx - 0.38 * w) & (np.abs(c[:, 1] - cy) < 0.30 * h)],
         "E": c[(c[:, 0] > cx + 0.38 * w) & (np.abs(c[:, 1] - cy) < 0.30 * h)],
@@ -133,10 +113,20 @@ def auto_corners(img):
     if any(len(v) < 20 for v in sides.values()):
         return None
     lines = {}
-    for k, pts in sides.items():
-        vx, vy, x0, y0 = cv2.fitLine(pts.astype(np.float32), cv2.DIST_HUBER,
-                                     0, 0.01, 0.01).flatten()
-        lines[k] = (float(vx), float(vy), float(x0), float(y0))
+    for key, pts in sides.items():
+        # Trimmed refit: a bystander's shoe or a sheet of paper poking over
+        # the frame edge joins the bright blob and drags a plain fit wildly
+        # off (seen on a real capture: the fitted top line left the image).
+        pts = pts.astype(np.float32)
+        for _ in range(3):
+            vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_HUBER,
+                                         0, 0.01, 0.01).flatten()
+            resid = np.abs((pts[:, 0] - x0) * vy - (pts[:, 1] - y0) * vx)
+            keep = resid < max(6.0, float(np.percentile(resid, 80)))
+            if keep.all() or keep.sum() < 20:
+                break
+            pts = pts[keep]
+        lines[key] = (float(vx), float(vy), float(x0), float(y0))
 
     def cross(l1, l2):
         vx1, vy1, x1, y1 = l1
@@ -146,9 +136,22 @@ def auto_corners(img):
         t = np.linalg.solve(A, b)
         return [x1 + t[0] * vx1, y1 + t[0] * vy1]
 
-    return np.array([cross(lines["N"], lines["W"]), cross(lines["N"], lines["E"]),
+    quad = np.array([cross(lines["N"], lines["W"]), cross(lines["N"], lines["E"]),
                      cross(lines["S"], lines["E"]), cross(lines["S"], lines["W"])],
                     dtype=np.float32)
+    # Sanity: a real maze quad is convex, near-square, and on the image.
+    # Returning None (-> manual click) beats returning garbage that warps
+    # into a diagonal smear and still "solves".
+    Hi, Wi = img.shape[:2]
+    if (quad[:, 0] < -0.05 * Wi).any() or (quad[:, 0] > 1.05 * Wi).any() \
+            or (quad[:, 1] < -0.05 * Hi).any() or (quad[:, 1] > 1.05 * Hi).any():
+        return None
+    if not cv2.isContourConvex(quad.reshape(-1, 1, 2)):
+        return None
+    lens = [float(np.hypot(*(quad[i] - quad[(i + 1) % 4]))) for i in range(4)]
+    if max(lens) > 1.45 * min(lens):
+        return None
+    return quad
 
 
 def click_corners(img, window="click corners: TL, TR, BR, BL  (u=undo, Enter=done)"):

@@ -96,8 +96,8 @@ Useful flags:
 |---|---|
 | `--no-ui` | headless: skip the review window (used by scripts/tests) |
 | `--save-masks` | also save the binary colour-masking stages (lab task 6): `*_mask_binary.png` (photo → black/white), `*_mask_walls.png` (walls only), `*_mask_obstacles.png` (pillar discs only); free floor = the black remainder. Works on `obstacle_planner.py` too |
-| `--corners click` | force the manual 4-corner picker (staff-approved, Ed #156) |
-| `--corners auto` | ignore any cached corners and re-detect |
+| `--corners click` | force the manual 4-corner picker (staff-approved, Ed #156). Default is fresh auto-detection every run — there is no corner caching |
+| `--force` | emit even when the ambiguity gate says wall detection looks unreliable |
 | `--flr` | also print the old week-8 `flr` string, for eyeballing |
 | `--turn-radius 0.09` | arc radius in metres for 90° turns (max = 0.09) |
 | `--turn-cost 0` | optimise for fewest cells instead of fewest actions |
