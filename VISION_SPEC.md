@@ -105,20 +105,29 @@ The first genuine obstacle-course captures: same fixed rig, **3680×2452**
 (and 1440×960 for two of them), with 4–5 cylinders standing in an open area.
 Stored in `vision/test_images/ed279/`. What they proved:
 
-- **The obstacle region is the 5×5 at NW cell (0,3)** — identical across all
-  eight, and it has no interior walls, matching #270.
-- **Cylinders measure 94–97 mm** against the 100 mm spec — detection is
-  accurate on real hardware, not just synthetics.
-- **They broke, and then fixed, the rectifier.** These frames are far more
-  overhead than the earlier photo, so a boundary wall shows only its 1–2 px
-  top edge at grey ≈90 instead of a 15 px face at grey ≈25. The old
-  refinement (which required a ≥6 px run darker than 60) skipped the real
-  boundary and locked onto an interior wall 1.5 cells in, shifting the whole
-  grid. Fixed by adding a **lattice-comb refinement**: instead of trying to
-  isolate the outer boundary wall, fit a comb of n+1 equally spaced lines to
-  *all* the maze's walls, which all sit on the same lattice. Both refinements
-  now run and the pipeline keeps whichever the wall detector reads more
-  decisively.
+- **The obstacle region is the 5×5 at NW cell (1,3)** — identical across all
+  eight, and it has no interior walls, matching #270. (Early analysis said
+  (0,3); that came from a misregistered rectification, see below.)
+- **Cylinders measure 96–100 mm** against the 100 mm spec — detection is
+  accurate on real hardware, not just synthetics — and they stand at
+  arbitrary measured positions, nowhere near cell centres. The planners use
+  the measured positions directly.
+- **They broke, and then fixed, the rectifier — twice.** These frames are
+  far more overhead than the earlier photo, so a boundary wall shows only
+  its 1–2 px top edge at grey ≈90 instead of a 15 px face at grey ≈25, and
+  the arena has a wide floor apron between the aluminium frame and the true
+  maze walls. The boundary refinement latched onto an interior wall on one
+  axis and produced an **anisotropic** fit — 5.5–8 real columns stretched
+  over the 9-column lattice while the rows fit correctly (caught because
+  the eight photos disagreed on wall counts, 29–60, and cylinder blobs
+  warped into ellipses). The fix exploits the one constraint that forbids
+  this: **the maze is square, so both axes share one pitch.** Opposite-side
+  wall pairs are now chosen jointly with a ≤6 % pitch-agreement gate, an
+  invisible boundary wall is *derived* from the opposite wall shifted by
+  n × pitch, and the lattice-comb fallback fits a single shared pitch. All
+  eight captures now agree (58–61 walls, axis anisotropy ≤ 3 %), and the
+  maze reads as one fully connected 70-cell region — the "disconnected
+  pockets" earlier runs reported were registration artifacts.
 - Ambiguous-edge counts are higher on these (10–23 vs 3) but the flags sit
   **around the cylinders**, which partially darken a sampling strip. Since
   §4.2 says that region has no interior walls, `obstacle_planner` already
@@ -203,14 +212,25 @@ margin), and the final pose must land in the goal cell. The tool exits
 non-zero and says why if not — so a pasted array has already been checked
 against the photo it came from.
 
+**`initial_pose`**: the tools also emit
+`let initial_pose: Isometry2<f32> = ...` for the firmware's second `todo!()`.
+Under the agreed frame (world origin = power-on pose at the start cell
+centre, +x = start heading) it is `Isometry2::identity()` **by construction**
+— the frame is defined by where the robot wakes up. If the firmware instead
+anchors its frame to the maze (which is what a non-trivial `initial_pose`
+implies), that is one flag's worth of change on the vision side, but the
+origin/axis convention has to come from the robot side — see question 2.
+
 Two things I need from you to finish this:
 
 1. **`TRAVEL_SPEED`** — the emitted arrays reference it by name; tell me the
    value/const you settle on (or I'll inline a number).
-2. **Confirm the world-frame origin** above, and whether `Motion::Arc`'s
-   implicit geometry is "circle tangent to the current heading through
-   `final_position`" — that's what I assumed, and it's what makes the arc
-   unique given the enum has no radius/centre field.
+2. **Confirm the world-frame origin** above (power-on pose, making
+   `initial_pose` the identity — or a maze-fixed frame, in which case define
+   its origin and axes), and whether `Motion::Arc`'s implicit geometry is
+   "circle tangent to the current heading through `final_position`" — that's
+   what I assumed, and it's what makes the arc unique given the enum has no
+   radius/centre field.
 
 ## 5. Pipeline design
 

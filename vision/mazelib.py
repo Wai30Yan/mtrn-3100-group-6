@@ -303,43 +303,51 @@ def _wall_evidence(warp, ratio=0.86):
     return ((gray.astype(np.float32) < ratio * bg) | cyan).astype(np.float32)
 
 
-def _fit_comb(profile, n, lo, hi, nominal_pitch):
-    """Best (offset, pitch) placing n+1 equally spaced lattice lines on the
-    peaks of a 1-D wall-evidence profile. Every interior wall sits on this
-    lattice, so the periodic signal is strong even when the outer boundary
-    wall itself is hard to isolate. Returns (offset, pitch, score)."""
-    best = None
-    for pitch in np.arange(nominal_pitch * 0.80, nominal_pitch * 1.20, 0.5):
-        for off in np.arange(lo, hi, 0.5):
-            xs = off + np.arange(n + 1) * pitch
-            if xs[0] < 0 or xs[-1] >= len(profile):
-                continue
-            s = 0.0
-            for j, x in enumerate(xs):
-                i = int(x)
-                v = float(profile[max(0, i - 3):i + 4].max())
-                # end teeth are the outer boundary walls, always present
-                s += v * (3.0 if j in (0, n) else 1.0)
-            if best is None or s > best[2]:
-                best = (float(off), float(pitch), float(s))
-    return best
+def _window_max(prof, r=3):
+    """Sliding max of a 1-D profile over +/-r px."""
+    m = np.copy(prof)
+    for s in range(1, r + 1):
+        m[:-s] = np.maximum(m[:-s], prof[s:])
+        m[s:] = np.maximum(m[s:], prof[:-s])
+    return m
 
 
 def _comb_quad(coarse, n, k, pad, size):
-    """Alternative refinement: fit the cell lattice directly. Returns a quad
-    in coarse-warp coordinates, or None."""
+    """Alternative refinement: fit the cell lattice directly, with ONE pitch
+    SHARED by both axes - the maze is physically square, so anything else is
+    impossible. The axis with strong wall evidence pins the pitch; the weak
+    axis (e.g. a washed-out hairline boundary) then only needs its offset,
+    which the interior walls determine. Wide search: the coarse quad can be
+    the aluminium frame with several cells of floor apron inside it (the
+    ed279 lab captures), putting the true pitch far from k.
+    Returns a quad in coarse-warp coordinates, or None."""
     ev = _wall_evidence(coarse)
     a0, a1 = pad + int(0.30 * size), pad + int(0.70 * size)
-    span = int(0.7 * k)
-    fx = _fit_comb(ev[a0:a1, :].mean(axis=0), n, pad - span, pad + span, k)
-    fy = _fit_comb(ev[:, a0:a1].mean(axis=1), n, pad - span, pad + span, k)
-    if fx is None or fy is None:
+    mx = _window_max(ev[a0:a1, :].mean(axis=0))
+    my = _window_max(ev[:, a0:a1].mean(axis=1))
+    W = len(mx)
+    lo = max(0, pad - 60)
+    ends = [0, n]
+    best = None
+    for p in np.arange(0.55 * k, 1.16 * k, 0.5):
+        hi = W - int(n * p) - 1
+        if hi <= lo:
+            continue
+        offs = np.arange(lo, hi)
+        idx = np.round(offs[:, None] + np.arange(n + 1) * p).astype(int)
+        vx, vy = mx[idx], my[idx]
+        vx[:, ends] *= 3.0             # boundary walls always exist
+        vy[:, ends] *= 3.0
+        sx, sy = vx.sum(axis=1), vy.sum(axis=1)
+        s = float(sx.max() + sy.max())
+        if best is None or s > best[0]:
+            best = (s, float(offs[sx.argmax()]), float(offs[sy.argmax()]),
+                    float(p))
+    if best is None:
         return None
-    ox, px_, _ = fx
-    oy, py_, _ = fy
-    return np.array([[ox, oy], [ox + n * px_, oy],
-                     [ox + n * px_, oy + n * py_], [ox, oy + n * py_]],
-                    dtype=np.float32)
+    _, ox, oy, p = best
+    return np.array([[ox, oy], [ox + n * p, oy], [ox + n * p, oy + n * p],
+                     [ox, oy + n * p]], dtype=np.float32)
 
 
 def _decisiveness(warp, n, k):
@@ -388,46 +396,84 @@ def rectify(img, corners, n=9, k=K, refine=True, debug=False):
         "right": _side_lines(_run_candidates(mask, "right", pad, size), "x", sign=+1),
     }
 
-    # Disambiguate frame seams / interior walls by GLOBAL lattice consistency:
-    # the correct opposite-side pair implies a cell pitch, and lattice lines
-    # at that pitch must land on interior wall mass.
+    # Disambiguate frame seams / interior walls by GLOBAL lattice consistency,
+    # scored on the LENIENT local-contrast evidence (a washed-out hairline
+    # boundary is invisible to the strict mask but present here).
     a0, a1 = pad + int(0.32 * size), pad + int(0.68 * size)
-    proj_y = mask[:, a0:a1].mean(axis=1)
-    proj_x = mask[a0:a1, :].mean(axis=0)
+    ev = _wall_evidence(coarse)
+    proj_y = _window_max(ev[:, a0:a1].mean(axis=1))
+    proj_x = _window_max(ev[a0:a1, :].mean(axis=0))
     centre = pad + size / 2
 
-    def best_pair(near_lines, far_lines, proj):
-        best, best_score = None, -1.0
-        for mn_, bn, _sn in near_lines[:3]:
-            for mf, bf, _sf in far_lines[:3]:
-                near_c = mn_ * centre + bn
-                far_c = mf * centre + bf
-                pitch = (far_c - near_c) / n
-                if not 0.55 * k < pitch < 1.15 * k:
-                    continue
-                score = 0.0
-                for i in range(1, n):
-                    p = int(round(near_c + i * pitch))
-                    lo2, hi2 = max(0, p - 3), min(len(proj), p + 4)
-                    if lo2 < hi2:
-                        score += float(proj[lo2:hi2].max())
-                if score > best_score:
-                    best, best_score = ((mn_, bn), (mf, bf)), score
-        return best
+    def comb_score(c0, pitch, proj):
+        s = 0.0
+        for i in range(n + 1):
+            p = int(round(c0 + i * pitch))
+            if 0 <= p < len(proj):
+                s += float(proj[p]) * (3.0 if i in (0, n) else 1.0)
+        return s
 
-    pair_y = best_pair(cand_lines["top"], cand_lines["bottom"], proj_y)
-    pair_x = best_pair(cand_lines["left"], cand_lines["right"], proj_x)
+    def scored_pairs(near_lines, far_lines, proj):
+        out = []
+        for mn_, bn, _sn in near_lines[:4]:
+            for mf, bf, _sf in far_lines[:4]:
+                near_c = mn_ * centre + bn
+                pitch = (mf * centre + bf - near_c) / n
+                if 0.55 * k < pitch < 1.15 * k:
+                    out.append((comb_score(near_c, pitch, proj), pitch,
+                                (mn_, bn), (mf, bf)))
+        out.sort(key=lambda t: -t[0])
+        return out
+
+    pairs_y = scored_pairs(cand_lines["top"], cand_lines["bottom"], proj_y)
+    pairs_x = scored_pairs(cand_lines["left"], cand_lines["right"], proj_x)
+
+    # The maze is SQUARE: both axes must agree on the cell pitch. Pick the
+    # jointly best consistent (y-pair, x-pair); if one axis has no line pair
+    # consistent with the other (its far wall was invisible - seen on the
+    # ed279 captures, where the boundary refinement latched onto an interior
+    # wall and stretched 5.5 real columns over the 9-column lattice), trust
+    # the strong axis's pitch and DERIVE the weak axis's missing side from
+    # its one good line shifted by n * pitch.
+    def best_synth(pitch, near_side, far_side, proj):
+        """Best derived opposite-side pair at a given pitch: each single line
+        proposes the missing side n * pitch away; score the whole comb."""
+        syn = [(comb_score(m * centre + b, pitch, proj), (m, b),
+                (m, b + n * pitch)) for m, b, _ in cand_lines[near_side][:4]]
+        syn += [(comb_score(m * centre + b - n * pitch, pitch, proj),
+                 (m, b - n * pitch), (m, b))
+                for m, b, _ in cand_lines[far_side][:4]]
+        return max(syn, key=lambda t: t[0]) if syn else None
+
+    # Candidates: (total comb score, top, bottom, left, right). A real
+    # opposite-side pair can still be a symmetric interior-wall trap (both
+    # axes one cell in, pitches agreeing), so synthesis candidates always
+    # compete on score - they win when their combs land on more wall mass.
+    options = []
+    for sy_, py_, t_, b_ in pairs_y[:6]:
+        for sx_, px_, l_, r_ in pairs_x[:6]:
+            if abs(px_ - py_) <= 0.06 * max(px_, py_):
+                options.append((sx_ + sy_, t_, b_, l_, r_))
+    for sy_, py_, t_, b_ in pairs_y[:2]:
+        s = best_synth(py_, "left", "right", proj_x)
+        if s:
+            options.append((sy_ + s[0], t_, b_, s[1], s[2]))
+    for sx_, px_, l_, r_ in pairs_x[:2]:
+        s = best_synth(px_, "top", "bottom", proj_y)
+        if s:
+            options.append((sx_ + s[0], s[1], s[2], l_, r_))
+    joint = max(options, key=lambda t: t[0]) if options else None
     if debug:
         import sys
         print(f"# side candidates: "
               + ", ".join(f"{s}:{[(round(b, 1), sup) for _m, b, sup in v]}"
                           for s, v in cand_lines.items()), file=sys.stderr)
-        print(f"# chosen pairs: y={pair_y} x={pair_x}", file=sys.stderr)
-    if pair_y is None or pair_x is None:
+        print(f"# joint pair: {joint}", file=sys.stderr)
+    if joint is None:
         return _pick_rectification(img, coarse, None, T @ H, dst, n, k, pad,
                                    size, debug)
-    lines = {"top": pair_y[0], "bottom": pair_y[1],
-             "left": pair_x[0], "right": pair_x[1]}
+    lines = {"top": joint[1], "bottom": joint[2],
+             "left": joint[3], "right": joint[4]}
 
     def cross(h_line, v_line):
         mh, bh = h_line            # y = mh*x + bh
@@ -1259,6 +1305,19 @@ def course_to_motions(wps_px, anchor, exit_dir=None, entry_cell=None,
     if exit_dir is not None:
         motions.append(("pivot", heading_world(exit_dir, anchor[2])))
     return motions
+
+
+def format_initial_pose(start):
+    """Rust literal for `let initial_pose: Isometry2<f32> = todo!();`.
+
+    The agreed world frame IS the power-on pose (start cell centre, +x =
+    start heading), so the initial pose is the identity by construction. If
+    the firmware instead anchors its frame to the maze, the vision side needs
+    that origin convention (see VISION_SPEC.md section 4) and this plus every
+    coordinate in `solution` changes together."""
+    r, c, d = start
+    return (f"let initial_pose: Isometry2<f32> = Isometry2::identity(); "
+            f"// = start cell ({r},{c}) facing {DIR_NAMES[d]}")
 
 
 def format_motions(motions, indent="    "):

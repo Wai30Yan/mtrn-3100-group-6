@@ -232,16 +232,16 @@ def main():
     if not ok:
         raise SystemExit(f"UNRUNNABLE PATH: {msg}")
 
-    print("// paste in place of the todo!() in "
-          "micromouse-rs/src/main.rs: let solution: &[Motion] = ...")
+    print("// paste in place of the todo!()s in micromouse-rs/src/main.rs")
     print(f"// absolute world coords (m, rad); origin = power-on pose at "
           f"start cell {start[:2]} facing {ml.DIR_NAMES[start[2]]}, "
           f"+x = that heading, +y = left")
+    print(ml.format_initial_pose(start))
     print(f"// start -> course entry {(er, ec)} (Arcs) -> {len(cylinders)} "
           f"obstacles (Pivot+Line) -> exit {(xr, xc)} facing "
           f"{ml.DIR_NAMES[exit_dir]} -> goal {goal}")
     print(f"// {len(motions)} motions; min wall clearance {clearance:.0f} mm")
-    print(ml.format_motions(motions))
+    print("let solution: &[Motion] = " + ml.format_motions(motions) + ";")
 
     if not args.no_ui:
         cv2.imshow("course - any key to close", vis)

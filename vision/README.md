@@ -84,33 +84,40 @@ Useful flags:
 Output (real example, from `test_images/maze_fixed_cam.jpg`):
 
 ```rust
+// paste in place of the todo!()s in micromouse-rs/src/main.rs
 // absolute world coords (m, rad); origin = power-on pose at start cell (2, 0)
 // facing S, +x = that heading, +y = left
+let initial_pose: Isometry2<f32> = Isometry2::identity(); // = start cell (2,0) facing S
 // 10 motions, 14 cells; min wall clearance 87 mm
-&[
+let solution: &[Motion] = &[
     Motion::Line { final_position: Translation2::new(0.0900, 0.0000), final_speed: TRAVEL_SPEED },
     Motion::Arc  { final_position: Translation2::new(0.1800, 0.0900), final_speed: TRAVEL_SPEED },
     ...
     Motion::Line { final_position: Translation2::new(0.7200, 1.4400), final_speed: 0.0 },
-]
+];
 ```
 
-Paste it in place of the `todo!()` in
-`let solution: &[Motion] = todo!();` in `micromouse-rs/src/main.rs`, then
-flash.
+Both `let` lines paste over their `todo!()`s in `micromouse-rs/src/main.rs`,
+then flash. `initial_pose` is the identity **by construction**: the agreed
+world frame is anchored at the robot's power-on pose. If the firmware ends up
+using a maze-fixed frame instead, the vision side needs that origin
+convention (VISION_SPEC.md §4) — then `initial_pose` becomes the start-cell
+pose and every coordinate in `solution` shifts with it, one flag's worth of
+change here.
 
 ### Real photos to try
 
 `test_images/ed279/pic1..8.jpeg` are genuine lab captures **with the §4.2
 cylinders in place** (from Ed #279). The obstacle region in all of them is
-the 5×5 at NW cell `(0,3)`.
+the 5×5 at NW cell `(1,3)`.
 
 ```bash
 ./.venv/bin/python maze_solver.py test_images/ed279/pic5.jpeg --start 8,6,N --goal 0,2
 ```
 
-Note these captures show a maze split into several disconnected regions, so
-pick a start and goal in the same one — the tool tells you if you haven't.
+The maze in these captures is one fully connected 70-cell region (early
+versions of the pipeline reported disconnected pockets — that was a
+rectification bug, fixed).
 
 ## 4. §4.2 — obstacle course
 
@@ -131,15 +138,23 @@ Emits **one** `&[Motion]` array for the whole run — start → course entry
 (Arcs) → through the obstacles (Pivot + Line) → exit → goal — plus a
 trajectory overlay, which is the 1-mark evidence for the occupancy map.
 
-Worked example on a real capture:
+Worked example on a real capture (verified end to end):
 
 ```bash
 ./.venv/bin/python obstacle_planner.py test_images/ed279/pic5.jpeg \
-    --region 0,3 --entry 0,3,E --exit 4,5 --start 6,2,N --goal 8,4
+    --region 1,3 --entry 1,5,S --exit 1,7 --start 0,2,E --goal 1,8
 ```
 
 To find the entry/exit gaps for a photo you haven't seen before, run
 `maze_solver.py` on it first and read them off the wall overlay.
+
+Cylinders are used at their **measured positions** — they are nowhere near
+cell centres in the real setups, and the planner does not care. If a pillar
+sits so close to a wall that no route clears both by the robot radius, the
+planner routes another way when one exists, and refuses (UNRUNNABLE) when
+none does: in pic5 the fifth pillar stands 126 mm from the region's south
+wall, making the `--exit 5,7` gap physically unthreadable for a 150 mm robot
+— the tool rejects it rather than emitting a path that would clip.
 
 ## 5. When it says NO PATH or UNRUNNABLE
 
