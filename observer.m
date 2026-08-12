@@ -1,3 +1,4 @@
+%% 
 syms txf tyf ttf
 syms vxf vyf vtf
 syms bxf byf btf
@@ -7,9 +8,9 @@ syms axf ayf atf
 % l is the distance between the IMU and center of rotation
 syms dt rd bw ix iy
 
-txi = txf - vxf*dt + axf*dt^2/2;
-tyi = tyf - vyf*dt + ayf*dt^2/2;
-tti = ttf - vtf*dt + atf*dt^2/2;
+txi = txf - vxf*dt - axf*dt^2/2;
+tyi = tyf - vyf*dt - ayf*dt^2/2;
+tti = ttf - vtf*dt - atf*dt^2/2;
 
 vxi = vxf - axf*dt;
 vyi = vyf - ayf*dt;

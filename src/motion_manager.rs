@@ -1,7 +1,7 @@
 use core::matches;
 
 use crate::na::ComplexField;
-use crate::{DT, state_observer};
+use crate::{DT, TRAVEL_SPEED, state_observer};
 use na::{Isometry2, Rotation2, Translation2, UnitComplex};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -46,17 +46,14 @@ pub struct MotionManager {
     current_speed: f32,
 }
 
-const BASIC_ANGULAR_GAIN: f32 = 50.0;
-const BASIC_LINEAR_GAIN: f32 = 10.0;
-const BASIC_CROSS_GAIN: f32 = 5.0;
+const BASIC_ANGULAR_GAIN: f32 = 10.0;
+const BASIC_LINEAR_GAIN: f32 = 5.0;
+const BASIC_CROSS_GAIN: f32 = 3.0;
 
-const MAX_VELOCITY: f32 = 0.20;
-const MAX_ACCELERATION: f32 = 0.10;
+const MAX_VELOCITY: f32 = TRAVEL_SPEED;
+const MAX_ACCELERATION: f32 = TRAVEL_SPEED / 2.0;
 const MAX_ANGULAR: f32 = 1.5;
 const OVERSHOOT_GAIN: f32 = 0.2;
-
-const GAIN_GAMMA: f32 = 0.3;
-const GAIN_B: f32 = 50.0;
 
 const EPSILON: f32 = 0.01;
 
@@ -77,7 +74,7 @@ impl MotionManager {
                 final_speed,
             } => {
                 let path_delta = final_position / self.current_pose.translation;
-                if path_delta.vector.norm() <= EPSILON {
+                if path_delta.vector.norm() <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT {
                     self.current_pose.translation = final_position;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
@@ -91,7 +88,7 @@ impl MotionManager {
                     self.current_pose *= Translation2::new(self.current_speed * DT, 0.0);
                 }
 
-                Self::ramsete_follow(
+                Self::dumb_follow(
                     observed_pose,
                     self.current_pose,
                     ChassisSpeeds {
@@ -108,7 +105,7 @@ impl MotionManager {
                 let rot_delta = final_pose.rotation / self.current_pose.rotation;
                 let mut turn_rate = 0.0;
 
-                if path_delta.vector.norm() <= EPSILON {
+                if path_delta.vector.norm() <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT {
                     self.current_pose = final_pose;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
@@ -131,7 +128,7 @@ impl MotionManager {
                         .append_rotation_wrt_center_mut(&UnitComplex::new(turn_rate * DT));
                 }
 
-                Self::ramsete_follow(
+                Self::dumb_follow(
                     observed_pose,
                     self.current_pose,
                     ChassisSpeeds {
@@ -196,31 +193,10 @@ impl MotionManager {
     ) -> ChassisSpeeds {
         let error = observed_pose.inv_mul(&desired_pose);
         ChassisSpeeds {
-            vx: desired_speeds.vx
-                + (BASIC_LINEAR_GAIN * error.translation.x).clamp_magnitude(MAX_VELOCITY * 0.2),
+            vx: desired_speeds.vx + BASIC_LINEAR_GAIN * error.translation.x,
             omega: desired_speeds.omega
-                + (BASIC_ANGULAR_GAIN * error.rotation.angle()
-                    + BASIC_CROSS_GAIN * error.translation.y)
-                    .clamp_magnitude(MAX_ANGULAR * 0.3),
-        }
-    }
-
-    // https://wiki.purduesigbots.com/software/control-algorithms/ramsete
-    fn ramsete_follow(
-        observed_pose: Isometry2<f32>,
-        desired_pose: Isometry2<f32>,
-        desired_speeds: ChassisSpeeds,
-    ) -> ChassisSpeeds {
-        let error = observed_pose.inv_mul(&desired_pose);
-        let k = 2.0
-            * GAIN_GAMMA
-            * f32::hypot(desired_speeds.omega, f32::sqrt(GAIN_B) * desired_speeds.vx);
-        ChassisSpeeds {
-            vx: desired_speeds.vx * error.rotation.cos_angle() + k * error.translation.x,
-            omega: desired_speeds.omega
-                + k * error.rotation.angle()
-                + GAIN_B * desired_speeds.vx * error.rotation.sin_angle() * error.translation.y
-                    / error.rotation.angle(),
+                + BASIC_ANGULAR_GAIN * error.rotation.angle()
+                + BASIC_CROSS_GAIN * error.translation.y,
         }
     }
 }

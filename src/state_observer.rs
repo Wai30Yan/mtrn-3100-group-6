@@ -9,13 +9,13 @@ use na::{Isometry2, SMatrix, SVector, Translation2, Vector2};
 use crate::{DT, encoder::Encoder, imu::Imu, print};
 
 pub const R: f32 = 0.032;
-pub const B: f32 = 0.086;
+pub const B: f32 = 0.083;
 const IX: f32 = -0.004;
 const IY: f32 = 0.020;
 
 const ENCODER_COVAR: f32 = 0.002;
-const IMU_A_COVAR: f32 = 1.0000;
-const IMU_G_COVAR: f32 = 0.0005;
+const IMU_A_COVAR: f32 = 100.0;
+const IMU_G_COVAR: f32 = 100.0;
 const HIT_WINDOW_L: f32 = 0.030;
 const HIT_WINDOW_W: f32 = 0.020;
 
@@ -54,7 +54,7 @@ impl StateObserver {
                 0.0,
             ]),
             covar: SMatrix::from_diagonal(&SVector::from_column_slice(&[
-                0.0025, 0.0025, 0.04, 0.01, 0.01, 0.01, 0.06, 0.06, 0.06,
+                0.0025, 0.0025, 0.04, 0.01, 0.01, 0.01, 0.10, 0.10, 0.10,
             ])),
 
             prev_left: 0.0,
@@ -279,43 +279,41 @@ impl StateObserver {
 
     fn f(beta: SVector<f32, 12>) -> SVector<f32, 15> {
         SVector::from_column_slice(&[
-            (beta[9] * DT * DT) / 2. - beta[3] * DT + beta[0],
-            (beta[10] * DT * DT) / 2. - beta[4] * DT + beta[1],
-            (beta[11] * DT * DT) / 2. - beta[5] * DT + beta[2],
+            beta[0] - DT * beta[3] - (beta[9] * DT * DT) / 2.,
+            beta[1] - DT * beta[4] - (beta[10] * DT * DT) / 2.,
+            beta[2] - DT * beta[5] - (beta[11] * DT * DT) / 2.,
             beta[3] - beta[9] * DT,
             beta[4] - beta[10] * DT,
             beta[5] - beta[11] * DT,
             beta[6],
             beta[7],
             beta[8],
-            (DT * (2.
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[3] - (beta[9] * DT) / 2.)
-                + 2. * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.)
-                - B * (beta[5] - (beta[11] * DT) / 2.)))
+            -(DT * (B * (beta[5] - (beta[11] * DT) / 2.)
+                - 2. * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                    * (beta[3] - (beta[9] * DT) / 2.)
+                + 2. * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                    * (beta[4] - (beta[10] * DT) / 2.)))
                 / R,
             (DT * (2.
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[3] - (beta[9] * DT) / 2.)
-                + 2. * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.)
-                + B * (beta[5] - (beta[11] * DT) / 2.)))
+                + B * (beta[5] - (beta[11] * DT) / 2.)
+                - 2. * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                    * (beta[4] - (beta[10] * DT) / 2.)))
                 / R,
-            cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+            cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[4] - (beta[10] * DT) / 2.)
-                - sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                + sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.),
-            beta[6]
+            beta[6] + beta[9] * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                - beta[10] * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 + beta[11] * IY
-                + IX * beta[5] * beta[5]
-                + beta[9] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                + beta[10] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
+                + IX * beta[5] * beta[5],
             beta[7]
+                + beta[10] * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                + beta[9] * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 + beta[11] * IX
-                + IY * beta[5] * beta[5]
-                + beta[10] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                - beta[9] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
+                + IY * beta[5] * beta[5],
             beta[8] + beta[5],
         ])
     }
@@ -331,7 +329,7 @@ impl StateObserver {
             0.,
             0.,
             0.,
-            DT * DT / 2.,
+            -DT * DT / 2.,
             0.,
             0.,
             0.,
@@ -344,7 +342,7 @@ impl StateObserver {
             0.,
             0.,
             0.,
-            DT * DT / 2.,
+            -DT * DT / 2.,
             0.,
             0.,
             0.,
@@ -357,7 +355,7 @@ impl StateObserver {
             0.,
             0.,
             0.,
-            DT * DT / 2.,
+            -DT * DT / 2.,
             0.,
             0.,
             0.,
@@ -433,157 +431,158 @@ impl StateObserver {
             0.,
             0.,
             (DT * (2.
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[4] - (beta[10] * DT) / 2.)
-                - 2. * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                + 2. * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.)))
                 / R,
-            (2. * DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            (2. * DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            -(DT * (B + DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[4] - (beta[10] * DT) / 2.)
-                - DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+            (2. * DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            -(2. * DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            -(DT * (B
+                + DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                    * (beta[4] - (beta[10] * DT) / 2.)
+                + DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.)))
                 / R,
             0.,
             0.,
             0.,
-            -(DT * DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            -(DT * DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            (DT * ((B * DT) / 2.
+            -(DT * DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            (DT * DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            -(DT * ((DT
+                * DT
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                * (beta[4] - (beta[10] * DT) / 2.))
+                / 2.
+                - (B * DT) / 2.
                 + (DT
                     * DT
-                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.))
-                    / 2.
-                - (DT
-                    * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.))
                     / 2.))
                 / R,
             0.,
             0.,
             (DT * (2.
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[4] - (beta[10] * DT) / 2.)
-                - 2. * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                + 2. * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.)))
                 / R,
-            (2. * DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            (2. * DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            (DT * (B - DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+            (2. * DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            -(2. * DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            -(DT * (DT
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[4] - (beta[10] * DT) / 2.)
-                + DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                - B
+                + DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.)))
                 / R,
             0.,
             0.,
             0.,
-            -(DT * DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
-            -(DT * DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / R,
+            -(DT * DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
+            (DT * DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / R,
             -(DT * ((B * DT) / 2.
-                - (DT
+                + (DT
                     * DT
-                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[4] - (beta[10] * DT) / 2.))
                     / 2.
                 + (DT
                     * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[3] - (beta[9] * DT) / 2.))
                     / 2.))
                 / R,
             0.,
             0.,
-            -cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                * (beta[3] - (beta[9] * DT) / 2.)
-                - sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                    * (beta[4] - (beta[10] * DT) / 2.),
-            -sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            (DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+            sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                * (beta[4] - (beta[10] * DT) / 2.)
+                - cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                    * (beta[3] - (beta[9] * DT) / 2.),
+            sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
+            cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
+            (DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[3] - (beta[9] * DT) / 2.))
                 / 2.
-                + (DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                - (DT
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[4] - (beta[10] * DT) / 2.))
                     / 2.,
             0.,
             0.,
             0.,
-            (DT * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / 2.,
-            -(DT * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])) / 2.,
-            -(DT * DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+            -(DT * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / 2.,
+            -(DT * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])) / 2.,
+            (DT * DT
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                 * (beta[3] - (beta[9] * DT) / 2.))
                 / 4.
                 - (DT
                     * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
                     * (beta[4] - (beta[10] * DT) / 2.))
                     / 4.,
             0.,
             0.,
-            beta[10] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                - beta[9] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
+            beta[10] * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                + beta[9] * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
             0.,
             0.,
             2. * IX * beta[5]
                 - (beta[10]
                     * DT
-                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                    * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                     / 2.
-                + (beta[9]
+                - (beta[9]
                     * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                     / 2.,
             1.,
             0.,
             0.,
-            cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            IY + (beta[10]
+            cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
+            -sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
+            IY - (beta[10]
                 * DT
                 * DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                 / 4.
                 - (beta[9]
                     * DT
                     * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                     / 4.,
             0.,
             0.,
-            -beta[9] * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2])
-                - beta[10] * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
+            beta[10] * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2])
+                - beta[9] * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
             0.,
             0.,
             2. * IY * beta[5]
                 + (beta[9]
                     * DT
-                    * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                    * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                     / 2.
-                + (beta[10]
+                - (beta[10]
                     * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                     / 2.,
             0.,
             1.,
             0.,
-            -sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]),
-            IX - (beta[9]
+            sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
+            cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]),
+            IX + (beta[9]
                 * DT
                 * DT
-                * cosf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                * cosf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                 / 4.
                 - (beta[10]
                     * DT
                     * DT
-                    * sinf32((beta[11] * DT * DT) / 4. - (beta[5] * DT) / 2. + beta[2]))
+                    * sinf32((beta[11] * DT * DT) / 4. + (beta[5] * DT) / 2. - beta[2]))
                     / 4.,
             0.,
             0.,

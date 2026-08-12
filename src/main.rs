@@ -35,7 +35,7 @@ use stm32g4xx_hal::{
 
 use crate::{
     display::Display,
-    encoder::EncoderInstance,
+    encoder::{Encoder, EncoderInstance},
     imu::Imu,
     lidar::Lidar,
     motion_manager::{Motion, MotionManager},
@@ -72,7 +72,7 @@ pub type I2cDev<'a> = RefCellDevice<
     >,
 >;
 
-const TIMESTEP_MS: u32 = 30;
+const TIMESTEP_MS: u32 = 40;
 const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
@@ -90,7 +90,7 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 0.1;
+const TRAVEL_SPEED: f32 = 0.2;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -309,25 +309,56 @@ fn main() -> ! {
     let mut display = Display::new(RefCellDevice::new(&i2c));
     display.print("Hello World!\n");
 
-    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.090, -0.090), 0.0);
+    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.090, 0.270), 0.0);
     let solution: &[Motion] = &[
         Motion::Line {
-            final_position: Translation2::new(0.540, -0.090),
-            final_speed: 0.1,
+            final_position: Translation2::new(0.360, 0.270),
+            final_speed: TRAVEL_SPEED,
         },
         Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.630, 0.000), f32::consts::FRAC_PI_2),
-            final_speed: 0.1,
+            final_pose: Isometry2::new(Vector2::new(0.450, 0.360), f32::consts::FRAC_PI_2),
+            final_speed: TRAVEL_SPEED,
         },
         Motion::Line {
-            final_position: Translation2::new(0.630, 0.270),
-            final_speed: 0.0,
-        }
+            final_position: Translation2::new(0.450, 0.540),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.540, 0.630), 0.0),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.630, 0.540), -f32::consts::FRAC_PI_2),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Line {
+            final_position: Translation2::new(0.630, 0.360),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.720, 0.270), 0.0),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.810, 0.180), -f32::consts::FRAC_PI_2),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.720, 0.090), -f32::consts::PI),
+            final_speed: TRAVEL_SPEED,
+        },
+        Motion::Line {
+            final_position: Translation2::new(0.630, 0.090),
+            final_speed: TRAVEL_SPEED,
+        },
     ];
     let mut solution_step: usize = 0;
 
     let mut observer = StateObserver::new(initial_pose);
     let mut motion_manager = MotionManager::new(initial_pose);
+
+    let mut gyro_bias = 0.0;
+    let mut gyro = 0.0;
 
     // Let the state observer settle
     for i in 1..100 {
@@ -335,6 +366,8 @@ fn main() -> ! {
         encoder_right.update();
         imu.update();
         observer.update(&imu, &encoder_left, &encoder_right);
+
+        gyro_bias += imu.gz() / 100.0;
 
         display.clear();
         display.print(&format!("{}\n", i));
@@ -355,7 +388,7 @@ fn main() -> ! {
 
         observer.update(&imu, &encoder_left, &encoder_right);
 
-        if matches!(lidar_l.update(), nb::Result::Ok(()))
+        /*if matches!(lidar_l.update(), nb::Result::Ok(()))
             && let Some(dist) = lidar_l.distance()
         {
             observer.lidar_update(
@@ -375,7 +408,7 @@ fn main() -> ! {
             && let Some(dist) = lidar_f.distance()
         {
             observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
-        }
+        }*/
 
         if motion_manager.idle() && solution_step < solution.len() {
             motion_manager.set_target(solution[solution_step]);
@@ -387,6 +420,17 @@ fn main() -> ! {
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
+
+        let error = motion_manager.pose() / observer.pose();
+        display.clear();
+        display.print(&format!(
+            "{:.2}\n{:.2}\n{:.2}\n",
+            error.translation.x,
+            error.translation.y,
+            error.rotation.angle(),
+        ));
+        gyro += (imu.gz() - gyro_bias) * DT;
+        display.print(&format!("{:.2}\n", gyro));
 
         /*display.clear();
         let p = motion_manager.pose();
