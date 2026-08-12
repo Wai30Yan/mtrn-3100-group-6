@@ -51,6 +51,11 @@ def main():
     ap.add_argument("--start", required=True,
                     help="maze start row,col,dir - also the world-frame origin")
     ap.add_argument("--goal", required=True, help="maze goal row,col")
+    ap.add_argument("--margin", type=float, default=5.0,
+                    help="safety margin (mm) beyond the 75 mm robot radius, "
+                         "for both planning and the final clearance check; "
+                         "lower it only if the built course is too tight "
+                         "(default 5)")
     ap.add_argument("--turn-radius", type=float, default=0.09,
                     help="Arc radius (m) for turns in the normal-maze legs")
     ap.add_argument("--n", type=int, default=9)
@@ -111,8 +116,13 @@ def main():
     if args.rotate:
         warp = np.ascontiguousarray(np.rot90(warp, k=(360 - args.rotate) // 90))
 
-    # ---- detect walls FIRST: the exit gap side is read from the image ------
-    grid, scores = ml.detect_walls(warp, n=args.n, chamfer=args.chamfer)
+    # ---- cylinders first (their discs are excluded from wall evidence so a
+    # pillar on a lattice line can't read as a phantom wall), then walls: the
+    # exit gap side is read from the image ----------------------------------
+    cylinders = ml.detect_cylinders(warp, region, args.region_cells)
+    grid, scores = ml.detect_walls(warp, n=args.n, chamfer=args.chamfer,
+                                   exclude=ml.cylinder_mask(warp.shape,
+                                                            cylinders))
     exit_sides = []
     for d in range(4):
         r2, c2 = xr + ml.DR[d], xc + ml.DC[d]
@@ -133,7 +143,6 @@ def main():
               f"{ml.DIR_NAMES[ml.OPP[ed]]} of {(er, ec)} - check --entry",
               file=sys.stderr)
 
-    cylinders = ml.detect_cylinders(warp, region, args.region_cells)
     print(f"# {len(cylinders)} cylinders detected", file=sys.stderr)
     for c in cylinders:
         print(f"#   at ({c.cx:.0f},{c.cy:.0f}) px, r={c.r:.0f} px "
@@ -145,9 +154,13 @@ def main():
             print(f"# mask: {p}", file=sys.stderr)
 
     wps_px, blocked = ml.plan_course(None, cylinders, region, entry, exit_cell,
-                                     args.region_cells, exit_dir=exit_dir)
+                                     args.region_cells, exit_dir=exit_dir,
+                                     margin_floor_mm=args.margin)
     if wps_px is None:
-        raise SystemExit("NO ROUTE through the obstacle course - check detection")
+        raise SystemExit(
+            "NO ROUTE through the obstacle course within the safety margin - "
+            "check detection, or (if the built course is genuinely that "
+            "tight) rerun with a smaller --margin")
 
 
 
@@ -233,10 +246,9 @@ def main():
     except ValueError as e:
         raise SystemExit(str(e))
 
-    circles = [(*ml.px_to_world(c.cx, c.cy, start),
-                c.r * ml.CELL_MM / ml.K / 1000.0) for c in cylinders]
-    ok, clearance, msg = ml.check_motions(motions, phys_grid, start, goal,
-                                          circles=circles)
+    ok, clearance, msg = ml.check_motions(
+        motions, phys_grid, start, goal,
+        circles=ml.cylinders_to_circles(cylinders), margin_mm=args.margin)
     # Abort BEFORE printing: a rejected array must never end up on the
     # clipboard just because the failure was on the line after it.
     if not ok:

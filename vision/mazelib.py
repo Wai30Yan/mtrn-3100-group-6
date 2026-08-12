@@ -19,6 +19,7 @@
 import json
 import math
 import os
+import warnings
 from collections import namedtuple
 from heapq import heappush, heappop
 
@@ -650,7 +651,16 @@ class Grid:
 EdgeScore = namedtuple("EdgeScore", "r c d score")
 
 
-def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055):
+def cylinder_mask(shape, cylinders, k=K):
+    """Bool mask of the detected cylinder discs, inflated 40% + 4 px to also
+    cover the leaning body of the 100 mm-tall pillar."""
+    m = np.zeros(shape[:2], np.uint8)
+    for c in cylinders or []:
+        cv2.circle(m, (int(c.cx), int(c.cy)), int(c.r * 1.4) + 4, 1, -1)
+    return m > 0
+
+
+def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055, exclude=None):
     """Detect walls on a rectified maze image.
 
     The homography maps the FLOOR plane, but the walls are 150 mm tall: a
@@ -666,10 +676,17 @@ def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055):
     floor-plate seam, Ed #118, is light grey and fails the darkness test), or
     if a cyan clip crosses the strip. Score = covered fraction of the central
     EDGE_SPAN. Returns (Grid, [EdgeScore]) with scores for the review UI.
+
+    exclude: optional bool mask of pixels that must contribute NO wall
+    evidence — the detected cylinder discs (cylinder_mask): a dark pillar
+    body sitting on a lattice line otherwise reads as a phantom wall.
     """
     gray = cv2.cvtColor(warp, cv2.COLOR_BGR2GRAY).astype(np.float32)
     hsv = cv2.cvtColor(warp, cv2.COLOR_BGR2HSV)
     cyan = (cv2.inRange(hsv, CYAN_LO, CYAN_HI) > 0)
+    if exclude is not None:
+        gray = np.where(exclude, np.nan, gray)   # NaN drops out of the stats
+        cyan = cyan & ~exclude
     grid = Grid(n, chamfer)
     scores = []
     lo = int(k * (1 - EDGE_SPAN) / 2)
@@ -684,9 +701,7 @@ def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055):
             y1 = y + (reach if y >= centre else inner)
             g = gray[y0:y1, c * k + lo:c * k + hi]
             cy = cyan[y0:y1, c * k + lo:c * k + hi]
-            mn, mx = g.min(axis=0), g.max(axis=0)
-            med = np.median(g, axis=0)
-            has_clip = cy.any(axis=0)
+            axis = 0
         else:                           # vertical edge, x = (c+1)*k
             x = (c + 1) * k
             reach = int(8 + lean_gain * abs(x - centre))
@@ -694,14 +709,18 @@ def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055):
             x1 = x + (reach if x >= centre else inner)
             g = gray[r * k + lo:r * k + hi, x0:x1]
             cy = cyan[r * k + lo:r * k + hi, x0:x1]
-            mn, mx = g.min(axis=1), g.max(axis=1)
-            med = np.median(g, axis=1)
-            has_clip = cy.any(axis=1)
+            axis = 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")     # all-NaN slices -> NaN below
+            mn, mx = np.nanmin(g, axis=axis), np.nanmax(g, axis=axis)
+            med = np.nanmedian(g, axis=axis)
+        has_clip = cy.any(axis=axis)
         # A position is wall if its darkest transverse pixel is (a) absolutely
         # dark AND well below the brightest (floor) pixel in the slice, or
         # (b) a localized dip below the slice's own median - catches thin
         # walls washed out by reflections, while broad soft shadows (uniform,
         # so min ~= median) stay rejected - or (c) crossed by a cyan clip.
+        # NaN comparisons are False, so fully-excluded slices are not-wall.
         covered = ((mn < np.minimum(DARK_MAX_THR * 0.9, 0.62 * mx))
                    | (mn < 0.85 * med) | has_clip)
         score = float(covered.mean()) if len(covered) else 0.0
@@ -820,14 +839,22 @@ def parse_cell(s):
 # ---------------------------------------------------------------------------
 
 def render_overlay(warp, grid, scores=None, path=None, start=None, goal=None,
-                   k=K, cylinders=None):
+                   k=K, cylinders=None, extra_walls=None):
     """Detected walls + path over the rectified photo: the demonstrator
-    evidence that the solution is image-derived, not hard-coded."""
+    evidence that the solution is image-derived, not hard-coded.
+    extra_walls: (r, c, d) edges drawn ORANGE — planning-only closures
+    (corridors a cylinder makes unsafe), distinct from real detected walls."""
     vis = warp.copy()
     n = grid.n
     for cyl in cylinders or []:              # measured discs, as-detected
         cv2.circle(vis, (int(cyl.cx), int(cyl.cy)), int(cyl.r),
                    (255, 0, 255), 2)
+    for r, c, d in extra_walls or []:
+        if d == S:
+            p1, p2 = (c * k, (r + 1) * k), ((c + 1) * k, (r + 1) * k)
+        else:
+            p1, p2 = ((c + 1) * k, r * k), ((c + 1) * k, (r + 1) * k)
+        cv2.line(vis, p1, p2, (0, 160, 255), 2)
     for r in range(n):
         for c in range(n):
             if grid.blocked[r, c]:
@@ -988,20 +1015,24 @@ def cylinders_to_circles(cylinders, k=K):
 
 
 def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
-                k=K, robot_radius_mm=75.0, margin_mm=None, exit_dir=None):
+                k=K, robot_radius_mm=75.0, margin_mm=None, exit_dir=None,
+                margin_floor_mm=2.0):
     """Occupancy-grid A* through the obstacle region, then line-of-sight
     shortcutting. entry = (r, c, dir of travel INTO the region), exit_cell =
     (r, c), exit_dir = the boundary side the exit gap is on (a corner exit
     cell touches TWO boundary sides; opening both would erase a real wall
     from the occupancy grid). Works in rectified px (1 px = CELL_MM / k mm).
 
-    margin_mm=None tries a graduated safety margin (25 -> 15 -> 8 -> 2 mm):
-    randomly-placed cylinders can leave gaps barely wider than the robot, so
-    prefer the safest route that exists rather than failing outright.
-    Returns (waypoints_px, occupancy_debug_image_mask)."""
+    margin_mm=None tries a graduated safety margin (25 -> 15 -> 8 ->
+    margin_floor_mm): randomly-placed cylinders can leave gaps barely wider
+    than the robot, so prefer the safest route that exists rather than
+    failing outright. The floor must match the margin check_motions will
+    verify with — a route below the checker's margin is planned only to be
+    rejected. Returns (waypoints_px, occupancy_debug_image_mask)."""
     if margin_mm is None:
         blocked = None
-        for m in (25.0, 15.0, 8.0, 2.0):
+        ladder = [m for m in (25.0, 15.0, 8.0) if m > margin_floor_mm]
+        for m in ladder + [float(margin_floor_mm)]:
             wps, blocked = plan_course(grid, cylinders, region, entry,
                                        exit_cell, region_cells, k,
                                        robot_radius_mm, m, exit_dir)
@@ -1332,11 +1363,7 @@ def save_masks(warp, base, cylinders=None, k=K):
     ev = (_wall_evidence(warp) * 255).astype(np.uint8)
     if cylinders is None:
         cylinders = detect_cylinders(warp, (0, 0), warp.shape[0] // k, k=k)
-    obs = np.zeros(warp.shape[:2], np.uint8)
-    for c in cylinders:
-        # +40% covers the leaning body of the 100 mm-tall cylinder, not
-        # just its base disc, so it is fully removed from the walls mask
-        cv2.circle(obs, (int(c.cx), int(c.cy)), int(c.r * 1.4) + 4, 255, -1)
+    obs = cylinder_mask(warp.shape, cylinders, k).astype(np.uint8) * 255
     walls = ev.copy()
     walls[obs > 0] = 0
     paths = []
@@ -1527,10 +1554,10 @@ def check_motions(motions, grid, anchor, goal=None, circles=None,
             if d < clear_mm:
                 clear_mm = d
     need = robot_radius_mm + margin_mm
-    if clear_mm < need:
+    if clear_mm < need - 0.05:      # equality is a pass, not a float lottery
         return (False, clear_mm,
-                f"path passes {clear_mm:.0f} mm from a wall; the robot needs "
-                f">= {need:.0f} mm (reduce --turn-radius)")
+                f"path passes {clear_mm:.1f} mm from a wall; the robot needs "
+                f">= {need:.1f} mm (reduce --turn-radius)")
     if goal is not None:
         gx, gy = cell_to_world(goal[0], goal[1], anchor)
         if math.hypot(fx - gx, fy - gy) > CELL_M / 2:
