@@ -73,6 +73,9 @@ def main():
     ap.add_argument("--corners", default="cache", choices=("cache", "auto", "click"),
                     help="corner source (cache -> auto -> click fallback)")
     ap.add_argument("--turn-cost", type=float, default=1.0)
+    ap.add_argument("--margin", type=float, default=5.0,
+                    help="safety margin (mm) beyond the 75 mm robot radius "
+                         "for the hybrid course crossing (default 5)")
     ap.add_argument("--turn-radius", type=float, default=0.09,
                     help="Arc radius in metres for 90-deg turns (default 0.09 "
                          "= half a cell); the emitted path is clearance-checked")
@@ -147,6 +150,51 @@ def main():
         commands, path = ml.solve(plan, start, goal, turn_cost=args.turn_cost)
     except ValueError as e:
         raise SystemExit(str(e))
+    if commands is None and cyls:
+        # Normal path finding cannot connect start and goal: if the block is
+        # the obstacle course, switch to hybrid mode - lattice legs up to the
+        # course, continuous (occupancy-grid) planning through the pillars.
+        motions, info = ml.solve_hybrid(grid, cyls, start, goal,
+                                        r_turn=args.turn_radius,
+                                        margin_mm=args.margin,
+                                        turn_cost=args.turn_cost)
+        if motions is not None:
+            rg, (er, ec, es), (xr, xc, xs) = (info["region"], info["entry"],
+                                              info["exit"])
+            print(f"# lattice route blocked - hybrid crossing of the course "
+                  f"at {rg}: enter {(er, ec)} from {ml.DIR_NAMES[es]}, exit "
+                  f"{(xr, xc)} to {ml.DIR_NAMES[xs]}", file=sys.stderr)
+            vis = ml.render_overlay(warp, grid, scores, None, start, goal,
+                                    cylinders=cyls, extra_walls=safety)
+            x0, y0 = rg[1] * ml.K, rg[0] * ml.K
+            cv2.rectangle(vis, (x0, y0), (x0 + 5 * ml.K, y0 + 5 * ml.K),
+                          (255, 0, 255), 2)
+            for pth in (list(info["path1"]) + [(er, ec)],
+                        [(xr, xc)] + list(info["path2"])):
+                p = [(c * ml.K + ml.K // 2, r * ml.K + ml.K // 2)
+                     for r, c in pth]
+                for a, b in zip(p, p[1:]):
+                    cv2.line(vis, a, b, (0, 200, 0), 4)
+            wp = [(int(x), int(y)) for x, y in info["wps"]]
+            for a, b in zip(wp, wp[1:]):
+                cv2.line(vis, a, b, (0, 200, 0), 4)
+            out = args.out or (os.path.splitext(image_path)[0]
+                               + "_overlay.png")
+            ml.write_image(out, vis)
+            print(f"# overlay: {out}", file=sys.stderr)
+            print("// paste in place of the todo!()s in "
+                  "micromouse-rs/src/main.rs")
+            print(f"// absolute world coords (m, rad), maze frame: origin = "
+                  f"maze top-left corner, +x = east/right, +y = north/up "
+                  f"(down is negative); start = cell {start[:2]} facing "
+                  f"{ml.DIR_NAMES[start[2]]}")
+            print(ml.format_initial_pose(start))
+            print(f"// hybrid: maze -> course {rg} -> maze; {len(motions)} "
+                  f"motions; min clearance {info['clearance']:.0f} mm")
+            print("let solution: &[Motion] = "
+                  + ml.format_motions(motions) + ";")
+            return
+        print(f"# hybrid crossing also failed: {info}", file=sys.stderr)
     if commands is None:
         overlay = ml.render_overlay(warp, grid, scores, None, start, goal,
                                     cylinders=cyls, extra_walls=safety)

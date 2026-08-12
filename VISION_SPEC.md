@@ -297,18 +297,31 @@ python obstacle_planner.py photo.jpg --region 2,2 --entry 4,2,E --exit 4,6 \
    the wall lattice, with centres corrected for body lean. Measured accuracy
    on synthetic scenes: ±2 mm diameter.
 3. **Occupancy grid** at 20 mm resolution: cylinders (detected radius +10 mm)
-   and region boundary walls (gaps at entry/exit only), inflated by robot
-   radius (75 mm) + a **graduated margin (25→15→8→2 mm)** — random cylinders
-   can leave gaps barely wider than the robot, so the planner prefers the
-   safest route that exists and reports when it had to shrink.
-4. **Plan** entry→exit with A* (8-connected, corner-cutting forbidden),
-   snapping a blocked entry/exit centre to the nearest free node in its cell,
-   then line-of-sight shortcut to sparse waypoints.
+   and the DETECTED walls of the region **padded by one cell** (so the gate
+   transits are part of the optimisation; non-designated course gaps are
+   closed), inflated by robot radius (75 mm) + a **graduated margin
+   (25→15→8→floor)** where the floor = the clearance-check margin
+   (`--margin`, default 5 mm) — random cylinders can leave gaps barely wider
+   than the robot, so the planner prefers the safest route that exists and
+   reports when it had to shrink.
+4. **Plan** pre-gate cell centre → post-gate cell centre with A* on a 10 mm
+   grid (8-connected, corner-cutting forbidden), line-of-sight shortcut,
+   then a **clearance-maximising refinement** (waypoints pushed to the local
+   distance-field maximum — config-space thinking per the Path Planning
+   assignment) with ≥ 40 mm waypoint spacing enforced against the inflation
+   mask (the firmware cannot drive shorter Lines).
 5. **Emit.** Trajectory overlay (the 1-mark evidence) + **one** `&[Motion]`
-   array for the whole run: start → course entry (Arcs) → through the
-   obstacles (Pivot + Line) → exit → goal (Arcs). The course polyline is
-   pinned to the entry and exit cell centres so the legs join at known
-   poses, and the exit-gap side is read from the **detected** walls.
+   array for the whole run: start → pre-gate cell (Arcs) → through the gate
+   and the obstacles (Pivot + Line) → post-gate cell → goal (Arcs). The
+   exit-gap side is read from the **detected** walls.
+
+**Hybrid mode in `maze_solver.py` (automatic):** when the lattice alone
+cannot connect start to goal and cylinders are present, the solver finds the
+course region itself (most cylinders, fewest interior walls), enumerates its
+detected gates, and tries every entry/exit gate pair with the machinery
+above — each candidate geometrically verified; cheapest verified crossing
+wins. Verified on all 8 ed279 lab captures (6 at the full 5 mm margin, 2 at
+2 mm — that built course pinches to ~79 mm at the south gate).
 
 *(§4.3 autonomous mapping is Waiyan's onboard `map.rs` — no laptop tool.)*
 
