@@ -14,13 +14,13 @@ const IX: f32 = -0.004;
 const IY: f32 = 0.020;
 
 const ENCODER_COVAR: f32 = 0.002;
-const IMU_A_COVAR: f32 = 0.0050;
-const IMU_G_COVAR: f32 = 0.0003;
+const IMU_A_COVAR: f32 = 1.0000;
+const IMU_G_COVAR: f32 = 0.0005;
 const HIT_WINDOW_L: f32 = 0.030;
 const HIT_WINDOW_W: f32 = 0.020;
 
-// ~10mm
-const LIDAR_COVAR: f32 = 0.000025;
+// ~5mm
+const LIDAR_COVAR: f32 = 0.00003;
 
 pub struct StateObserver {
     // The state vector contains the translation, velocities, linear
@@ -54,7 +54,7 @@ impl StateObserver {
                 0.0,
             ]),
             covar: SMatrix::from_diagonal(&SVector::from_column_slice(&[
-                0.0025, 0.0025, 0.04, 0.01, 0.01, 0.01, 0.04, 0.04, 0.04,
+                0.0025, 0.0025, 0.04, 0.01, 0.01, 0.01, 0.06, 0.06, 0.06,
             ])),
 
             prev_left: 0.0,
@@ -101,7 +101,7 @@ impl StateObserver {
             0.0,
             imu.ax(),
             imu.ay(),
-            imu.gz() * 1.68,
+            imu.gz(),
         ]);
 
         self.prev_left = encoder_left.position();
@@ -137,7 +137,7 @@ impl StateObserver {
         self.covar += covar.fixed_view(0, 0);
     }
 
-    pub fn lidar_update(&mut self, distance: f32, pose: Isometry2<f32>) {
+    pub fn lidar_update(&mut self, distance: f32, pose: Isometry2<f32>) -> bool {
         let hit = self.pose() * pose * Translation2::new(distance, 0.0);
         // TODO: disqualify hits in certain zones (edge and obstacles)
         let wall_x = roundf32(hit.translation.x / 0.180) * 0.180;
@@ -154,7 +154,7 @@ impl StateObserver {
             // Wall on y-axis (any y, tight x)
             (Vector2::new(1.0, 0.0), wall_x)
         } else {
-            return;
+            return false;
         };
 
         let h = Self::h(self.state, pose, wn, wd);
@@ -175,6 +175,8 @@ impl StateObserver {
 
         self.state = xk;
         self.covar = pk;
+
+        return true;
     }
 
     fn h(beta: SVector<f32, 12>, lp: Isometry2<f32>, wn: Vector2<f32>, wd: f32) -> f32 {

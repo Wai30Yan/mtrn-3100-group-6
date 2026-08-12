@@ -72,7 +72,7 @@ pub type I2cDev<'a> = RefCellDevice<
     >,
 >;
 
-const TIMESTEP_MS: u32 = 50;
+const TIMESTEP_MS: u32 = 30;
 const DT: f32 = (TIMESTEP_MS as f32) / 1000.0;
 
 pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
@@ -90,7 +90,7 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 1.0;
+const TRAVEL_SPEED: f32 = 0.1;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -311,7 +311,18 @@ fn main() -> ! {
 
     let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.090, -0.090), 0.0);
     let solution: &[Motion] = &[
-        Motion::Line { final_position: Translation2::new(0.450, -0.090), final_speed: 0.0 }
+        Motion::Line {
+            final_position: Translation2::new(0.540, -0.090),
+            final_speed: 0.1,
+        },
+        Motion::Arc {
+            final_pose: Isometry2::new(Vector2::new(0.630, 0.000), f32::consts::FRAC_PI_2),
+            final_speed: 0.1,
+        },
+        Motion::Line {
+            final_position: Translation2::new(0.630, 0.270),
+            final_speed: 0.0,
+        }
     ];
     let mut solution_step: usize = 0;
 
@@ -319,11 +330,14 @@ fn main() -> ! {
     let mut motion_manager = MotionManager::new(initial_pose);
 
     // Let the state observer settle
-    for _ in 1..100 {
+    for i in 1..100 {
         encoder_left.update();
         encoder_right.update();
         imu.update();
         observer.update(&imu, &encoder_left, &encoder_right);
+
+        display.clear();
+        display.print(&format!("{}\n", i));
 
         block!(period_timer.wait()).unwrap();
     }
@@ -374,7 +388,7 @@ fn main() -> ! {
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
 
-        display.clear();
+        /*display.clear();
         let p = motion_manager.pose();
         let a = observer.pose();
         display.print(&format!("{:?}\n", p.translation.vector[0]));
@@ -383,6 +397,7 @@ fn main() -> ! {
         display.print(&format!("{:?}\n", a.translation.vector[0]));
         display.print(&format!("{:?}\n", a.translation.vector[1]));
         display.print(&format!("{:?}\n", a.rotation.angle()));
+        */
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
