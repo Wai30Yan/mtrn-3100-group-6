@@ -820,11 +820,14 @@ def parse_cell(s):
 # ---------------------------------------------------------------------------
 
 def render_overlay(warp, grid, scores=None, path=None, start=None, goal=None,
-                   k=K):
+                   k=K, cylinders=None):
     """Detected walls + path over the rectified photo: the demonstrator
     evidence that the solution is image-derived, not hard-coded."""
     vis = warp.copy()
     n = grid.n
+    for cyl in cylinders or []:              # measured discs, as-detected
+        cv2.circle(vis, (int(cyl.cx), int(cyl.cy)), int(cyl.r),
+                   (255, 0, 255), 2)
     for r in range(n):
         for c in range(n):
             if grid.blocked[r, c]:
@@ -954,6 +957,34 @@ def detect_cylinders(warp, region, region_cells=5, k=K, lean_gain=0.055):
         ly = lean_gain * (cy + y0 - centre)
         out.append(Cylinder(cx - 0.5 * lx + x0, cy - 0.5 * ly + y0, rad))
     return out
+
+
+def wall_off_cylinders(grid, cylinders, k=K, clear_mm=80.0):
+    """Solver-grid safety net for photos that contain cylinders: add a wall
+    on every corridor (cell-centre-to-centre segment) that a measured disc
+    + robot radius (75) + margin (5) mm threatens, so solve() cannot route
+    the robot through or beside a pillar. Cylinders sit at arbitrary
+    measured positions, not on the lattice, so this is a segment-distance
+    test per corridor, not a blocked cell. Mutates and returns grid — pass
+    a copy if the physical map must stay clean (check_motions needs it)."""
+    threat_px = clear_mm / (CELL_MM / k)
+    for r, c, d in grid.interior_edges():
+        ax, ay = (c + 0.5) * k, (r + 0.5) * k
+        bx = ax + (k if d == E else 0)
+        by = ay + (k if d == S else 0)
+        for cyl in cylinders:
+            t = max(0.0, min(1.0, ((cyl.cx - ax) * (bx - ax)
+                                   + (cyl.cy - ay) * (by - ay)) / k ** 2))
+            if math.hypot(cyl.cx - (ax + t * (bx - ax)),
+                          cyl.cy - (ay + t * (by - ay))) < cyl.r + threat_px:
+                grid.add_wall(r, c, d)
+    return grid
+
+
+def cylinders_to_circles(cylinders, k=K):
+    """Measured discs as world-frame (x, y, radius_m) for check_motions."""
+    return [(*px_to_world(c.cx, c.cy, k=k), c.r * CELL_MM / k / 1000.0)
+            for c in cylinders]
 
 
 def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,

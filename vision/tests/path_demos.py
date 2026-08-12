@@ -12,7 +12,6 @@
 # =============================================================================
 import copy
 import glob
-import math
 import os
 import random
 import sys
@@ -91,18 +90,7 @@ def main():
         # threatens, on a planning copy. Verification below runs against the
         # physical grid + the actual discs.
         cyls = ml.detect_cylinders(warp, (0, 0), grid.n)
-        plan = copy.deepcopy(grid)
-        threat_px = (75.0 + 5.0) / (ml.CELL_MM / ml.K)   # robot + margin, px
-        for r, cc, d in grid.interior_edges():
-            ax, ay = (cc + 0.5) * ml.K, (r + 0.5) * ml.K
-            bx = ax + (ml.K if d == ml.E else 0)
-            by = ay + (ml.K if d == ml.S else 0)
-            for cyl in cyls:
-                t = max(0.0, min(1.0, ((cyl.cx - ax) * (bx - ax)
-                                       + (cyl.cy - ay) * (by - ay)) / ml.K ** 2))
-                if math.hypot(cyl.cx - (ax + t * (bx - ax)),
-                              cyl.cy - (ay + t * (by - ay))) < cyl.r + threat_px:
-                    plan.add_wall(r, cc, d)
+        plan = ml.wall_off_cylinders(copy.deepcopy(grid), cyls)
         pairs, region_size = pick_pairs(plan)
         print(f"{name}: largest region {region_size} cells, "
               f"{len(pairs)} runs")
@@ -110,14 +98,11 @@ def main():
         for i, (start, goal, cmds, path) in enumerate(pairs, 1):
             motions = ml.path_to_motions(path, anchor=start,
                                          start_heading=start[2])
-            circles = [(*ml.px_to_world(cyl.cx, cyl.cy, start),
-                        cyl.r * ml.CELL_MM / ml.K / 1000.0) for cyl in cyls]
-            ok, clear, msg = ml.check_motions(motions, grid, start, goal,
-                                              circles=circles)
-            vis = ml.render_overlay(warp, grid, None, path, start, goal)
-            for cyl in cyls:                 # the measured discs, as-detected
-                cv2.circle(vis, (int(cyl.cx), int(cyl.cy)), int(cyl.r),
-                           (255, 0, 255), 2)
+            ok, clear, msg = ml.check_motions(
+                motions, grid, start, goal,
+                circles=ml.cylinders_to_circles(cyls))
+            vis = ml.render_overlay(warp, grid, None, path, start, goal,
+                                    cylinders=cyls)
             txt = (f"{name} run {i}: start {start[:2]} {ml.DIR_NAMES[start[2]]}"
                    f" -> goal {goal} | {len(cmds)} actions, "
                    f"{len(motions)} motions, clearance {clear:.0f} mm"

@@ -30,6 +30,7 @@
 #  AI (Anthropic Claude), reviewed and tested on real lab-camera photos.
 # =============================================================================
 import argparse
+import copy
 import os
 import sys
 
@@ -126,28 +127,43 @@ def main():
     if not args.no_ui:
         grid = ml.review_walls(warp, grid, scores)
 
+    # The real 4.1 maze has no cylinders, but a photo may (4.2 setups): any
+    # detected pillar walls off the corridors it threatens, so the solver
+    # cannot route through or beside one. Verification below still runs
+    # against the PHYSICAL grid plus the measured discs.
+    cyls = ml.detect_cylinders(warp, (0, 0), args.n)
+    plan = grid
+    if cyls:
+        print(f"# {len(cyls)} cylinders detected - corridors near them "
+              f"walled off for planning", file=sys.stderr)
+        plan = ml.wall_off_cylinders(copy.deepcopy(grid), cyls)
+
     try:
-        commands, path = ml.solve(grid, start, goal, turn_cost=args.turn_cost)
+        commands, path = ml.solve(plan, start, goal, turn_cost=args.turn_cost)
     except ValueError as e:
         raise SystemExit(str(e))
     if commands is None:
-        overlay = ml.render_overlay(warp, grid, scores, None, start, goal)
+        overlay = ml.render_overlay(warp, grid, scores, None, start, goal,
+                                    cylinders=cyls)
         fail = args.out or "overlay_FAILED.png"
         ml.write_image(fail, overlay)
         # Say WHY: usually one of the two cells sits in a pocket the detected
         # walls seal off, which the overlay then makes obvious.
-        reach = ml.reachable_from(grid, start[:2])
+        reach = ml.reachable_from(plan, start[:2])
         where = ("the start and goal are in separate regions of the detected "
                  "maze" if goal not in reach else "unknown")
+        hint = (f"  Note {len(cyls)} detected cylinders also wall off nearby "
+                f"corridors (magenta discs in the overlay).\n" if cyls else "")
         raise SystemExit(
             f"NO PATH FOUND - {where}.\n"
             f"  start {start[:2]} can reach {len(reach)} cells; "
             f"goal {goal} is {'NOT ' if goal not in reach else ''}among them.\n"
+            + hint +
             f"  Check the walls around both cells in {fail} - if one is wrong, "
             f"rerun without --no-ui and click that edge to toggle it.")
 
-    # Self-check 1: replay the grid commands on the detected wall map.
-    end = ml.simulate(grid, start, commands)
+    # Self-check 1: replay the grid commands on the planning wall map.
+    end = ml.simulate(plan, start, commands)
     assert end[:2] == goal, f"simulation ended at {end}, expected {goal}"
 
     # Build the robot motions; world frame is anchored on the start pose.
@@ -158,11 +174,14 @@ def main():
         raise SystemExit(str(e))
 
     # Self-check 2: the motions themselves must be runnable - every Line
-    # reachable by the firmware, the swept path clear of the detected walls,
-    # and the final pose inside the goal cell.
-    ok, clearance, msg = ml.check_motions(motions, grid, start, goal)
+    # reachable by the firmware, the swept path clear of the detected walls
+    # AND the measured cylinder discs, and the final pose inside the goal
+    # cell. Checked against the PHYSICAL grid, not the planning copy.
+    ok, clearance, msg = ml.check_motions(motions, grid, start, goal,
+                                          circles=ml.cylinders_to_circles(cyls))
 
-    overlay = ml.render_overlay(warp, grid, scores, path, start, goal)
+    overlay = ml.render_overlay(warp, grid, scores, path, start, goal,
+                                cylinders=cyls)
     out = args.out or (os.path.splitext(image_path)[0] + "_overlay.png")
     ml.write_image(out, overlay)
     # Abort BEFORE printing: a rejected array must never end up on the
