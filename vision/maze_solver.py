@@ -40,13 +40,8 @@ import numpy as np
 import mazelib as ml
 
 
-def get_corners(img, image_path, mode, no_ui):
-    if mode == "cache" and image_path:
-        c = ml.load_cached_corners(image_path, img.shape)
-        if c is not None:
-            print("# corners: using cached", file=sys.stderr)
-            return c
-    if mode in ("cache", "auto"):
+def get_corners(img, mode, no_ui):
+    if mode == "auto":
         c = ml.auto_corners(img)
         if c is not None:
             print("# corners: auto-detected", file=sys.stderr)
@@ -54,8 +49,7 @@ def get_corners(img, image_path, mode, no_ui):
         print("# corners: auto-detect failed", file=sys.stderr)
     if no_ui:
         raise SystemExit("no corners available in --no-ui mode")
-    c = ml.click_corners(img)
-    return c
+    return ml.click_corners(img)
 
 
 def main():
@@ -70,8 +64,8 @@ def main():
                     help="corner chamfer span in cells (real arena: 1)")
     ap.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270),
                     help="rotate image CW so row 0 = the maze's North")
-    ap.add_argument("--corners", default="cache", choices=("cache", "auto", "click"),
-                    help="corner source (cache -> auto -> click fallback)")
+    ap.add_argument("--corners", default="auto", choices=("auto", "click"),
+                    help="corner source (auto-detect, or click all 4)")
     ap.add_argument("--turn-cost", type=float, default=1.0)
     ap.add_argument("--margin", type=float, default=5.0,
                     help="safety margin (mm) beyond the 75 mm robot radius "
@@ -88,6 +82,8 @@ def main():
     ap.add_argument("--save-masks", action="store_true",
                     help="also save the binary colour-mask stages "
                          "(*_mask_binary/walls/obstacles.png)")
+    ap.add_argument("--force", action="store_true",
+                    help="emit even when wall detection looks unreliable")
     args = ap.parse_args()
 
     if args.turn_cost < 0:
@@ -98,10 +94,6 @@ def main():
         image_path = f"capture_cam{args.capture}.png"
         ml.write_image(image_path, img)       # keep the evidence frame
         print(f"# captured -> {image_path}", file=sys.stderr)
-        if args.corners == "cache":
-            args.corners = "auto"             # a fresh capture must never
-                                              # inherit corners from an older
-                                              # frame at the same filename
     elif args.image:
         image_path = args.image
         img = cv2.imread(image_path)
@@ -113,8 +105,7 @@ def main():
     start = ml.parse_start(args.start)
     goal = ml.parse_cell(args.goal)
 
-    corners = get_corners(img, image_path, args.corners, args.no_ui)
-    ml.save_corners(image_path, img.shape, corners)
+    corners = get_corners(img, args.corners, args.no_ui)
 
     warp, _ = ml.rectify(img, corners, n=args.n)
     if args.rotate:
@@ -134,6 +125,18 @@ def main():
         base = os.path.splitext(args.out or image_path)[0]
         for p in ml.save_masks(warp, base, cylinders=cyls):
             print(f"# mask: {p}", file=sys.stderr)
+
+    # Refuse to emit from a rectification gone wrong: a bad warp turns the
+    # lattice strips into noise, which shows up as an unusual number of
+    # mid-confidence edges. Good captures score <= ~15 ambiguous edges; a
+    # collapsed warp scores 25+ and would still "solve" happily.
+    ambiguous = sum(1 for e in scores if 0.25 <= e.score < 0.75)
+    if ambiguous > 20 and not args.force:
+        raise SystemExit(
+            f"RECTIFICATION LOOKS WRONG: {ambiguous} of {len(scores)} edges "
+            f"scored ambiguously (good captures stay under ~15). The warp "
+            f"probably failed - retry with --corners click, or pass --force "
+            f"to emit anyway at your own risk.")
 
     if not args.no_ui:
         grid = ml.review_walls(warp, grid, scores)

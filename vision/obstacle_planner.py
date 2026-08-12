@@ -61,12 +61,14 @@ def main():
     ap.add_argument("--n", type=int, default=9)
     ap.add_argument("--chamfer", type=int, default=1)
     ap.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270))
-    ap.add_argument("--corners", default="cache", choices=("cache", "auto", "click"))
+    ap.add_argument("--corners", default="auto", choices=("auto", "click"))
     ap.add_argument("--no-ui", action="store_true")
     ap.add_argument("--out", default=None)
     ap.add_argument("--save-masks", action="store_true",
                     help="also save the binary colour-mask stages "
                          "(*_mask_binary/walls/obstacles.png)")
+    ap.add_argument("--force", action="store_true",
+                    help="emit even when wall detection looks unreliable")
     args = ap.parse_args()
 
     if args.capture is not None:
@@ -110,8 +112,7 @@ def main():
         raise SystemExit(f"--entry heading {ml.DIR_NAMES[ed]} enters from "
                          f"outside the maze")
 
-    corners = get_corners(img, image_path, args.corners, args.no_ui)
-    ml.save_corners(image_path, img.shape, corners)
+    corners = get_corners(img, args.corners, args.no_ui)
     warp, _ = ml.rectify(img, corners, n=args.n)
     if args.rotate:
         warp = np.ascontiguousarray(np.rot90(warp, k=(360 - args.rotate) // 90))
@@ -123,6 +124,13 @@ def main():
     grid, scores = ml.detect_walls(warp, n=args.n, chamfer=args.chamfer,
                                    exclude=ml.cylinder_mask(warp.shape,
                                                             cylinders))
+    ambiguous = sum(1 for e in scores if 0.25 <= e.score < 0.75)
+    if ambiguous > 20 and not args.force:
+        raise SystemExit(
+            f"RECTIFICATION LOOKS WRONG: {ambiguous} of {len(scores)} edges "
+            f"scored ambiguously (good captures stay under ~15). The warp "
+            f"probably failed - retry with --corners click, or pass --force "
+            f"to emit anyway at your own risk.")
     exit_sides = []
     for d in range(4):
         r2, c2 = xr + ml.DR[d], xc + ml.DC[d]
