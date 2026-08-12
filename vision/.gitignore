@@ -7,3 +7,5 @@ capture_cam*.png
 !test_images/maze_fixed_cam_overlay_example.png
 *_mask_*.png
 test_images/path_demos/
+overlay_FAILED.png
+course_FAILED.png
