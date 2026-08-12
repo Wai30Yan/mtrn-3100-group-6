@@ -36,8 +36,10 @@ use stm32g4xx_hal::{
 use crate::{
     display::Display,
     encoder::EncoderInstance,
+    explorer::{Explorer, ExplorerAction, ExplorerState},
     imu::Imu,
     lidar::Lidar,
+    map::{Direction, MazeMap},
     motion_manager::{Motion, MotionManager},
     motor::Motor,
     serial::UsbSerial,
@@ -48,8 +50,10 @@ extern crate nalgebra as na;
 
 pub mod display;
 pub mod encoder;
+pub mod explorer;
 pub mod imu;
 pub mod lidar;
+pub mod map;
 pub mod motion_manager;
 pub mod motor;
 pub mod serial;
@@ -307,7 +311,7 @@ fn main() -> ! {
     let mut lidar_f = Lidar::new(RefCellDevice::new(&i2c), lidar_f_en, LIDAR_ADDR_F);
 
     let mut display = Display::new(RefCellDevice::new(&i2c));
-    display.print("Hello World!\n");
+    // display.print("Hello World!\n");
 
     let initial_pose: Isometry2<f32> = Isometry2::identity();
     let solution: &[Motion] = &[];
@@ -355,10 +359,10 @@ fn main() -> ! {
         motor_right.set_speed(wr);
 
         display.clear();
-        let p = motion_manager.pose();
-        display.print(&format!("{:?}\n", p.translation.vector[0]));
-        display.print(&format!("{:?}\n", p.translation.vector[1]));
-        display.print(&format!("{:?}\n", p.rotation.angle()));
+        // let p = motion_manager.pose();
+        // display.print(&format!("{:?}\n", p.translation.vector[0]));
+        // display.print(&format!("{:?}\n", p.translation.vector[1]));
+        // display.print(&format!("{:?}\n", p.rotation.angle()));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
@@ -368,5 +372,59 @@ fn main() -> ! {
          * As a result we do not need to run the control loop in an interupt.
          */
         block!(period_timer.wait()).unwrap();
+
+        // ------- Task 4.3: For Gride Map and Exploration Engine --------
+        let mut map = MazeMap::<8, 8>::new();
+        let mut explorer = Explorer::<8, 8>::new((0, 0), Direction::North);
+
+        const WALL_THRESHOLD_M: f32 = 0.15;
+
+        /*  --------------------------------------------
+        Read raw distances from LiDAR sensors
+        Update Map
+        -------------------------------------------- */
+        let front_dist: Option<f32> = lidar_f.distance();
+        let left_dist: Option<f32> = lidar_l.distance();
+        let right_dist: Option<f32> = lidar_r.distance();
+
+        // Update walls in current cell based on current heading
+        map.update_from_lidars(
+            explorer.current_pos(),
+            explorer.heading(),
+            left_dist,
+            right_dist,
+            front_dist,
+            WALL_THRESHOLD_M,
+        );
+
+        /*  --------------------------------------------
+        Render Map & Status to OLED Display
+        -------------------------------------------- */
+        // TODO: Declare display object with i2c_bus
+        let _ = map.draw_on_display(&mut display, explorer.current_pos());
+
+        let action = explorer.step(&mut map);
+
+        match action {
+            ExplorerAction::MoveForward => {
+                // Execute hardware motor control
+            }
+            ExplorerAction::TurnLeft => {
+                // Execute hardware motor control
+            }
+            ExplorerAction::TurnRight => {
+                // Execute hardware motor control
+            }
+            ExplorerAction::Wait => {
+                // Do nothing, wait for next loop
+            }
+        }
+
+        if explorer.state() == ExplorerState::Done {
+            loop {
+                // Keep rendering display final state
+                let _ = map.draw_on_display(&mut display, explorer.current_pos());
+            }
+        }
     }
 }
