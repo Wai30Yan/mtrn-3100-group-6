@@ -137,12 +137,13 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
             }
 
             ExplorerState::ReturningToStart => {
-                if self.current_pos == (0, 0) {
+                // For hardcoded value for goal cell for navigation
+                if self.current_pos == (0, 5) {
                     self.state = ExplorerState::Done;
                     return ExplorerAction::Wait;
                 }
 
-                // Compute shortest path back to start (0, 0) if path queue is empty
+                // Compute shortest path back to start location if path queue is empty
                 if self.path.is_empty() {
                     if let Some(home_path) = map.find_shortest_path(self.current_pos, (0, 0)) {
                         self.path = home_path.into_iter().skip(1).collect();

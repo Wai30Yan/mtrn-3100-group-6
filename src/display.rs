@@ -68,7 +68,7 @@ impl<'a> DrawTarget for Display<'a> {
     where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
-        self.display.draw_iter(pixels);
+        let _ = self.display.draw_iter(pixels);
         Ok(())
     }
 }
