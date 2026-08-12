@@ -115,7 +115,7 @@ let initial_pose: Isometry2<f32> = Isometry2::identity(); // = start cell (2,0) 
 // 10 motions, 14 cells; min wall clearance 87 mm
 let solution: &[Motion] = &[
     Motion::Line { final_position: Translation2::new(0.0900, -0.5400), final_speed: TRAVEL_SPEED },
-    Motion::Arc  { final_position: Translation2::new(0.1800, -0.6300), final_speed: TRAVEL_SPEED },
+    Motion::Arc  { final_pose: Isometry2::new(Vector2::new(0.1800, -0.6300), 0.0000), final_speed: TRAVEL_SPEED },
     ...
     Motion::Line { final_position: Translation2::new(1.5300, -1.1700), final_speed: 0.0 },
 ];

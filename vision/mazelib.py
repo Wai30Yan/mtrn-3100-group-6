@@ -1420,8 +1420,10 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
 #
 # The firmware consumes `let solution: &[Motion] = ...;` where Motion is
 #   Line  { final_position: Translation2<f32>, final_speed: f32 }   straight
-#   Arc   { final_position: Translation2<f32>, final_speed: f32 }   circular
+#   Arc   { final_pose: Isometry2<f32>, final_speed: f32 }          circular
 #   Pivot { rotation: Rotation2<f32> }                              in place
+# Arc's final_pose = end position + exit tangent heading, which pins the
+# arc geometry exactly (tangent to the current heading at entry).
 # All coordinates ABSOLUTE in a frame FIXED TO THE MAZE: origin = the
 # maze's top-left (NW) outer corner, +x = east (image right), +y = north
 # (image up, so everything in the maze has negative y), angles radians
@@ -1485,8 +1487,9 @@ def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
     same-sense arcs with no straight between merge (U-turns become one
     180-degree Arc). A Pivot is emitted first if the robot's heading
     (start_heading; None = unknown, always pivot) doesn't match the first
-    leg. Returns [("pivot", theta) | ("line", x, y) | ("arc", x, y)], all in
-    the fixed maze frame (pivot theta = absolute target heading)."""
+    leg. Returns [("pivot", theta) | ("line", x, y) | ("arc", x, y, theta)],
+    all in the fixed maze frame (pivot theta = absolute target heading; arc
+    theta = the exit tangent heading, emitted in Arc's final_pose)."""
     if not 0.0 < r_turn <= CELL_M / 2:
         raise ValueError(
             f"turn radius {r_turn} m must be in (0, {CELL_M / 2}] - a larger "
@@ -1528,18 +1531,19 @@ def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
         if has_turn:
             v = unit(runs[j + 1][0])
             arc_end = (pts[b][0] + r_turn * v[0], pts[b][1] + r_turn * v[1])
+            exit_th = heading_world(runs[j + 1][0])
             sense = 1 if runs[j + 1][0] == (d + 3) % 4 else -1
             # merge with the previous motion if it is a same-sense arc that
             # ended exactly where this one starts (U-turn)
-            if motions and motions[-1][0] == "arc" and motions[-1][3] == sense \
+            if motions and motions[-1][0] == "arc" and motions[-1][4] == sense \
                     and math.hypot(pos[0] - motions[-1][1],
                                    pos[1] - motions[-1][2]) < 1e-6 \
                     and abs(gap) < 1e-6:
-                motions[-1] = ("arc", arc_end[0], arc_end[1], sense)
+                motions[-1] = ("arc", arc_end[0], arc_end[1], exit_th, sense)
             else:
-                motions.append(("arc", arc_end[0], arc_end[1], sense))
+                motions.append(("arc", arc_end[0], arc_end[1], exit_th, sense))
             pos = arc_end
-    return [m[:3] for m in motions]
+    return [m[:4] if m[0] == "arc" else m for m in motions]
 
 
 def course_to_motions(wps_px, anchor, exit_dir=None, entry_cell=None,
@@ -1645,8 +1649,11 @@ def format_motions(motions, indent="    "):
                          f"Translation2::new({m[1]:.4f}, {m[2]:.4f}), "
                          f"final_speed: {speed} }}")
         else:
-            parts.append(f"Motion::Arc {{ final_position: "
-                         f"Translation2::new({m[1]:.4f}, {m[2]:.4f}), "
+            # Arc carries the full end POSE (position + exit tangent):
+            # firmware shape Arc { final_pose: Isometry2<f32>, final_speed }
+            parts.append(f"Motion::Arc {{ final_pose: "
+                         f"Isometry2::new(Vector2::new({m[1]:.4f}, "
+                         f"{m[2]:.4f}), {m[3]:.4f}), "
                          f"final_speed: {speed} }}")
     if not parts:
         return "&[]"
