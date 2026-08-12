@@ -5,4 +5,5 @@ tests/synth_out/
 capture_cam*.png
 *_overlay.png
 !test_images/maze_fixed_cam_overlay_example.png
+*_mask_*.png
 test_images/path_demos/

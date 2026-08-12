@@ -73,6 +73,7 @@ Useful flags:
 | flag | what it does |
 |---|---|
 | `--no-ui` | headless: skip the review window (used by scripts/tests) |
+| `--save-masks` | also save the binary colour-masking stages (lab task 6): `*_mask_binary.png` (photo → black/white), `*_mask_walls.png` (walls only), `*_mask_obstacles.png` (pillar discs only); free floor = the black remainder. Works on `obstacle_planner.py` too |
 | `--corners click` | force the manual 4-corner picker (staff-approved, Ed #156) |
 | `--corners auto` | ignore any cached corners and re-detect |
 | `--flr` | also print the old week-8 `flr` string, for eyeballing |

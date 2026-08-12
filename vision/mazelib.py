@@ -1307,6 +1307,30 @@ def course_to_motions(wps_px, anchor, exit_dir=None, entry_cell=None,
     return motions
 
 
+def save_masks(warp, base, cylinders=None, k=K):
+    """Lab-task-6 evidence: the binary colour-masking stages, as images.
+    <base>_mask_binary.png     dark|cyan evidence (photo -> black/white)
+    <base>_mask_obstacles.png  detected cylinder discs only
+    <base>_mask_walls.png      evidence minus the discs = walls only
+    (paths/free floor = the black remainder of the walls mask)"""
+    ev = (_wall_evidence(warp) * 255).astype(np.uint8)
+    if cylinders is None:
+        cylinders = detect_cylinders(warp, (0, 0), warp.shape[0] // k, k=k)
+    obs = np.zeros(warp.shape[:2], np.uint8)
+    for c in cylinders:
+        # +40% covers the leaning body of the 100 mm-tall cylinder, not
+        # just its base disc, so it is fully removed from the walls mask
+        cv2.circle(obs, (int(c.cx), int(c.cy)), int(c.r * 1.4) + 4, 255, -1)
+    walls = ev.copy()
+    walls[obs > 0] = 0
+    paths = []
+    for suffix, m in (("binary", ev), ("obstacles", obs), ("walls", walls)):
+        p = f"{base}_mask_{suffix}.png"
+        write_image(p, m)
+        paths.append(p)
+    return paths
+
+
 def format_initial_pose(start):
     """Rust literal for `let initial_pose: Isometry2<f32> = todo!();`.
 
