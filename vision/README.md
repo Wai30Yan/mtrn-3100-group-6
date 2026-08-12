@@ -86,25 +86,29 @@ Output (real example, from `test_images/maze_fixed_cam.jpg`):
 
 ```rust
 // paste in place of the todo!()s in micromouse-rs/src/main.rs
-// absolute world coords (m, rad); origin = power-on pose at start cell (2, 0)
-// facing S, +x = that heading, +y = left
+// absolute world coords (m, rad), maze frame: origin = maze top-left corner,
+// +x = east/right, +y = north/up (down is negative); start = cell (2, 0) facing S
+let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0900, -0.4500), -1.5708); // start cell (2,0) facing S
 let initial_pose: Isometry2<f32> = Isometry2::identity(); // = start cell (2,0) facing S
 // 10 motions, 14 cells; min wall clearance 87 mm
 let solution: &[Motion] = &[
-    Motion::Line { final_position: Translation2::new(0.0900, 0.0000), final_speed: TRAVEL_SPEED },
-    Motion::Arc  { final_position: Translation2::new(0.1800, 0.0900), final_speed: TRAVEL_SPEED },
+    Motion::Line { final_position: Translation2::new(0.0900, -0.5400), final_speed: TRAVEL_SPEED },
+    Motion::Arc  { final_position: Translation2::new(0.1800, -0.6300), final_speed: TRAVEL_SPEED },
     ...
-    Motion::Line { final_position: Translation2::new(0.7200, 1.4400), final_speed: 0.0 },
+    Motion::Line { final_position: Translation2::new(1.5300, -1.1700), final_speed: 0.0 },
 ];
 ```
 
 Both `let` lines paste over their `todo!()`s in `micromouse-rs/src/main.rs`,
-then flash. `initial_pose` is the identity **by construction**: the agreed
-world frame is anchored at the robot's power-on pose. If the firmware ends up
-using a maze-fixed frame instead, the vision side needs that origin
-convention (VISION_SPEC.md §4) — then `initial_pose` becomes the start-cell
-pose and every coordinate in `solution` shifts with it, one flag's worth of
-change here.
+then flash. **The frame is fixed to the maze** (agreed 2026-08-12): origin at
+the maze's top-left outer corner, +x east (image right), +y north (image up)
+— so every coordinate in the maze has positive x and *negative* y, and cell
+(r, c)'s centre is `(0.18·(c+0.5), −0.18·(r+0.5))`. Angles are radians,
+CCW-positive, 0 = east; a `Pivot`'s rotation is the **absolute** target
+heading. The robot's odometry powers on at (0,0,0), so the firmware must
+seed it with the emitted `initial_pose` (start-cell pose in this frame)
+before executing `solution` — without that seed every motion is
+misinterpreted.
 
 ### Real photos to try
 

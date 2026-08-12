@@ -1111,21 +1111,6 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
     return wps, blocked
 
 
-def waypoints_to_robot_frame(wps_px, entry, k=K):
-    """Convert rectified-px waypoints to metres in the robot frame at course
-    entry: origin = entry cell centre, +x = heading into the region, +y = left
-    (CCW-positive angles, matching the firmware's nalgebra Rotation2)."""
-    er, ec, ed = entry
-    ox, oy = (ec + 0.5) * k, (er + 0.5) * k
-    m_per_px = CELL_MM / k / 1000.0
-    fwd = {N: (0, -1), E: (1, 0), S: (0, 1), W: (-1, 0)}[ed]
-    left = {N: (-1, 0), E: (0, -1), S: (1, 0), W: (0, 1)}[ed]
-    out = []
-    for x, y in wps_px:
-        du, dv = (x - ox) * m_per_px, (y - oy) * m_per_px
-        out.append((du * fwd[0] + dv * fwd[1], du * left[0] + dv * left[1]))
-    return out
-
 
 # ---------------------------------------------------------------------------
 # Motion emission (the week-12 robot interface)
@@ -1134,11 +1119,15 @@ def waypoints_to_robot_frame(wps_px, entry, k=K):
 #   Line  { final_position: Translation2<f32>, final_speed: f32 }   straight
 #   Arc   { final_position: Translation2<f32>, final_speed: f32 }   circular
 #   Pivot { rotation: Rotation2<f32> }                              in place
-# All coordinates ABSOLUTE in the robot's world frame: origin = the robot's
-# power-on pose = the maze start cell centre, +x = start heading, +y = left,
-# angles radians CCW-positive. Rotations are implicit along Line/Arc (robot
-# faces tangent); final_speed is 0.0 at the end / before a Pivot, else the
-# firmware's TRAVEL_SPEED constant. (Interface agreed with the robot side.)
+# All coordinates ABSOLUTE in a frame FIXED TO THE MAZE: origin = the
+# maze's top-left (NW) outer corner, +x = east (image right), +y = north
+# (image up, so everything in the maze has negative y), angles radians
+# CCW-positive with 0 = east. The robot's odometry wakes up at (0,0,0), so
+# the firmware must seed it with the emitted `initial_pose` (start cell
+# centre + start heading in this frame) before running `solution`.
+# Rotations are implicit along Line/Arc (robot faces tangent); final_speed
+# is 0.0 at the end / before a Pivot, else the firmware's TRAVEL_SPEED
+# constant. (Frame convention set by David, 2026-08-12.)
 # ---------------------------------------------------------------------------
 
 CELL_M = CELL_MM / 1000.0
@@ -1155,36 +1144,32 @@ _FWD = {N: (0, -1), E: (1, 0), S: (0, 1), W: (-1, 0)}     # (east, south)
 _LEFT = {N: (-1, 0), E: (0, -1), S: (1, 0), W: (0, 1)}
 
 
-def _world_from_maze(du, dv, anchor_dir):
-    """Project a maze-frame offset (metres east, metres south) into the world
-    frame of a pose facing anchor_dir."""
-    f, l = _FWD[anchor_dir], _LEFT[anchor_dir]
-    return (du * f[0] + dv * f[1], du * l[0] + dv * l[1])
+def _world_from_maze(du, dv, anchor_dir=None):
+    """Maze-frame offset (metres east, metres south of the maze's top-left
+    corner) -> world frame: +x = east/right, +y = north/up, so south is
+    negative y. anchor_dir is ignored (kept so call sites read unchanged:
+    the frame is fixed to the maze, not to the robot's start heading)."""
+    return (du, -dv)
 
 
-def cell_to_world(r, c, anchor):
-    """World coordinates (metres) of cell (r, c)'s centre, for a world frame
-    anchored at the centre of anchor = (row, col, dir)."""
-    ar, ac, ad = anchor
-    return _world_from_maze((c - ac) * CELL_M, (r - ar) * CELL_M, ad)
+def cell_to_world(r, c, anchor=None):
+    """World coordinates (metres) of cell (r, c)'s centre. Origin = the
+    maze's top-left (NW) outer corner; +x east, +y north — every cell has
+    positive x and negative y. anchor is ignored (fixed maze frame)."""
+    return _world_from_maze((c + 0.5) * CELL_M, (r + 0.5) * CELL_M)
 
 
-def px_to_world(x, y, anchor, k=K):
-    """World coordinates (metres) of a rectified-image pixel."""
-    ar, ac, ad = anchor
-    du = (x / k - (ac + 0.5)) * CELL_M
-    dv = (y / k - (ar + 0.5)) * CELL_M
-    return _world_from_maze(du, dv, ad)
+def px_to_world(x, y, anchor=None, k=K):
+    """World coordinates (metres) of a rectified-image pixel, same fixed
+    maze frame as cell_to_world."""
+    return _world_from_maze(x / k * CELL_M, y / k * CELL_M)
 
 
-def heading_world(d, anchor_dir):
+def heading_world(d, anchor_dir=None):
     """Absolute world-frame angle (radians, CCW-positive, in (-pi, pi]) of
-    compass direction d, for a frame anchored facing anchor_dir. One left
-    turn goes ad -> (ad+3)%4 and is +90 degrees."""
-    deg = (((anchor_dir - d) % 4) * 90.0 + 180.0) % 360.0 - 180.0
-    if deg <= -180.0 + 1e-9:      # keep the documented (-pi, pi]: a reversal
-        deg = 180.0               # is +pi, never -pi
-    return math.radians(deg)
+    compass direction d in the fixed maze frame: E = 0, N = +pi/2 (up the
+    image is +y), W = pi, S = -pi/2. anchor_dir is ignored."""
+    return {E: 0.0, N: math.pi / 2, W: math.pi, S: -math.pi / 2}[d]
 
 
 def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
@@ -1198,7 +1183,7 @@ def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
     180-degree Arc). A Pivot is emitted first if the robot's heading
     (start_heading; None = unknown, always pivot) doesn't match the first
     leg. Returns [("pivot", theta) | ("line", x, y) | ("arc", x, y)], all in
-    the world frame of `anchor`."""
+    the fixed maze frame (pivot theta = absolute target heading)."""
     if not 0.0 < r_turn <= CELL_M / 2:
         raise ValueError(
             f"turn radius {r_turn} m must be in (0, {CELL_M / 2}] - a larger "
@@ -1334,14 +1319,15 @@ def save_masks(warp, base, cylinders=None, k=K):
 def format_initial_pose(start):
     """Rust literal for `let initial_pose: Isometry2<f32> = todo!();`.
 
-    The agreed world frame IS the power-on pose (start cell centre, +x =
-    start heading), so the initial pose is the identity by construction. If
-    the firmware instead anchors its frame to the maze, the vision side needs
-    that origin convention (see VISION_SPEC.md section 4) and this plus every
-    coordinate in `solution` changes together."""
+    The world frame is fixed to the maze (origin = top-left corner, +x east,
+    +y north), so the robot's start pose is NOT the identity: the firmware
+    must seed its odometry with this before executing `solution`."""
     r, c, d = start
-    return (f"let initial_pose: Isometry2<f32> = Isometry2::identity(); "
-            f"// = start cell ({r},{c}) facing {DIR_NAMES[d]}")
+    x, y = cell_to_world(r, c)
+    th = heading_world(d)
+    return (f"let initial_pose: Isometry2<f32> = "
+            f"Isometry2::new(Vector2::new({x:.4f}, {y:.4f}), {th:.4f}); "
+            f"// start cell ({r},{c}) facing {DIR_NAMES[d]}")
 
 
 def format_motions(motions, indent="    "):
@@ -1369,12 +1355,13 @@ def format_motions(motions, indent="    "):
     return "&[\n" + indent + inner + ",\n]"
 
 
-def simulate_motions(motions, samples_per_m=200):
-    """Geometrically integrate a motion list from the world-frame origin pose
-    (0, 0, heading 0). Returns (sample_points, final_pose). Raises if a Line
-    target is not collinear with the heading at its start - the firmware's
-    Line primitive cannot reach lateral targets."""
-    x, y, th = 0.0, 0.0, 0.0
+def simulate_motions(motions, samples_per_m=200, start=(0.0, 0.0, 0.0)):
+    """Geometrically integrate a motion list from the pose `start` =
+    (x, y, heading) — the robot's initial_pose in the fixed maze frame.
+    Returns (sample_points, final_pose). Raises if a Line target is not
+    collinear with the heading at its start - the firmware's Line primitive
+    cannot reach lateral targets."""
+    x, y, th = start
     pts = [(x, y)]
     for m in motions:
         if m[0] == "pivot":
@@ -1491,7 +1478,9 @@ def check_motions(motions, grid, anchor, goal=None, circles=None,
     block()ed, since blocking synthesises walls that do not exist.
     Returns (ok, clearance_mm, message)."""
     try:
-        pts, (fx, fy, _th) = simulate_motions(motions)
+        ax, ay = cell_to_world(anchor[0], anchor[1])
+        pts, (fx, fy, _th) = simulate_motions(
+            motions, start=(ax, ay, heading_world(anchor[2])))
     except ValueError as e:
         return False, 0.0, str(e)
     # Walls are modelled as centrelines, so subtract their half-thickness -
@@ -1519,48 +1508,3 @@ def check_motions(motions, grid, anchor, goal=None, circles=None,
     return True, clear_mm, "ok"
 
 
-def waypoints_to_segments(wps_px, entry, exit_dir=None, k=K):
-    """The 4.2 handoff contract with the Rust side: firmware-ready
-    TURN-AND-DRIVE segments (relative pivot in degrees CCW-positive, then
-    drive distance in metres).
-
-    The firmware has no primitive that can chase a lateral waypoint
-    (Motion::Line only terminates on collinear targets, Motion::Arc is
-    todo!()), but Motion::Pivot takes any Rotation2 and Motion::Line handles
-    any straight run - so the polyline is decomposed into exactly those. The
-    first pivot is relative to the robot's heading entering the course; the
-    path starts at the entry cell centre (where the robot stands); a final
-    zero-distance pivot aligns the robot with exit_dir so the exit->goal flr
-    commands run without any hand-derived turn."""
-    pts = waypoints_to_robot_frame(wps_px, entry, k)
-    if pts and (abs(pts[0][0]) > 1e-6 or abs(pts[0][1]) > 1e-6):
-        pts = [(0.0, 0.0)] + pts        # robot stands at the entry centre
-    # drop sub-2cm intermediate points (occupancy-node snap noise): not worth
-    # a robot motion, and the position error is within drive tolerance
-    kept = [pts[0]]
-    for p in pts[1:-1]:
-        if np.hypot(p[0] - kept[-1][0], p[1] - kept[-1][1]) >= 0.02:
-            kept.append(p)
-    if len(pts) > 1:
-        kept.append(pts[-1])
-    pts = kept
-    segs = []
-    heading = 0.0
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-        dx, dy = x1 - x0, y1 - y0
-        dist = float(np.hypot(dx, dy))
-        if dist < 1e-4:
-            continue
-        bearing = float(np.degrees(np.arctan2(dy, dx)))
-        turn = (bearing - heading + 180.0) % 360.0 - 180.0
-        segs.append((turn, dist))
-        heading = bearing
-    if exit_dir is not None:
-        er, ec, ed = entry
-        # angle of compass heading exit_dir relative to the entry heading,
-        # CCW-positive: one left turn goes ed -> (ed+3)%4 and is +90 deg
-        want = (((ed - exit_dir) % 4) * 90.0 + 180.0) % 360.0 - 180.0
-        turn = (want - heading + 180.0) % 360.0 - 180.0
-        if abs(turn) > 0.5:
-            segs.append((turn, 0.0))
-    return segs
