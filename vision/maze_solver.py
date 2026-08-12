@@ -117,26 +117,31 @@ def main():
     if args.rotate:
         warp = np.ascontiguousarray(np.rot90(warp, k=(360 - args.rotate) // 90))
 
-    grid, scores = ml.detect_walls(warp, n=args.n, chamfer=args.chamfer)
+    # The real 4.1 maze has no cylinders, but a photo may (4.2 setups).
+    # Detect them FIRST: a dark pillar body on a lattice line reads as a
+    # phantom wall unless its disc is excluded from the wall evidence. Then
+    # wall off the corridors each disc threatens on a planning copy - the
+    # solver cannot route through or beside a pillar, but the map stays
+    # honest. Verification runs on the PHYSICAL grid + the measured discs.
+    cyls = ml.detect_cylinders(warp, (0, 0), args.n)
+    grid, scores = ml.detect_walls(warp, n=args.n, chamfer=args.chamfer,
+                                   exclude=ml.cylinder_mask(warp.shape, cyls))
 
     if args.save_masks:
         base = os.path.splitext(args.out or image_path)[0]
-        for p in ml.save_masks(warp, base):
+        for p in ml.save_masks(warp, base, cylinders=cyls):
             print(f"# mask: {p}", file=sys.stderr)
 
     if not args.no_ui:
         grid = ml.review_walls(warp, grid, scores)
 
-    # The real 4.1 maze has no cylinders, but a photo may (4.2 setups): any
-    # detected pillar walls off the corridors it threatens, so the solver
-    # cannot route through or beside one. Verification below still runs
-    # against the PHYSICAL grid plus the measured discs.
-    cyls = ml.detect_cylinders(warp, (0, 0), args.n)
     plan = grid
     if cyls:
         print(f"# {len(cyls)} cylinders detected - corridors near them "
               f"walled off for planning", file=sys.stderr)
         plan = ml.wall_off_cylinders(copy.deepcopy(grid), cyls)
+    safety = [(r, c, d) for r, c, d in plan.interior_edges()
+              if plan.has_wall(r, c, d) and not grid.has_wall(r, c, d)]
 
     try:
         commands, path = ml.solve(plan, start, goal, turn_cost=args.turn_cost)
@@ -144,7 +149,7 @@ def main():
         raise SystemExit(str(e))
     if commands is None:
         overlay = ml.render_overlay(warp, grid, scores, None, start, goal,
-                                    cylinders=cyls)
+                                    cylinders=cyls, extra_walls=safety)
         fail = args.out or "overlay_FAILED.png"
         ml.write_image(fail, overlay)
         # Say WHY: usually one of the two cells sits in a pocket the detected
@@ -153,7 +158,8 @@ def main():
         where = ("the start and goal are in separate regions of the detected "
                  "maze" if goal not in reach else "unknown")
         hint = (f"  Note {len(cyls)} detected cylinders also wall off nearby "
-                f"corridors (magenta discs in the overlay).\n" if cyls else "")
+                f"corridors (magenta discs / orange closures in the "
+                f"overlay).\n" if cyls else "")
         raise SystemExit(
             f"NO PATH FOUND - {where}.\n"
             f"  start {start[:2]} can reach {len(reach)} cells; "
@@ -181,7 +187,7 @@ def main():
                                           circles=ml.cylinders_to_circles(cyls))
 
     overlay = ml.render_overlay(warp, grid, scores, path, start, goal,
-                                cylinders=cyls)
+                                cylinders=cyls, extra_walls=safety)
     out = args.out or (os.path.splitext(image_path)[0] + "_overlay.png")
     ml.write_image(out, overlay)
     # Abort BEFORE printing: a rejected array must never end up on the

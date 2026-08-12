@@ -70,10 +70,14 @@ prints and an overlay `*_overlay.png` is saved as the demonstrator evidence.
 
 If the photo contains §4.2 cylinders, they are detected automatically
 (magenta discs in the overlay, at their measured positions — pillars sit
-anywhere, not on the grid): any corridor a disc + robot radius threatens is
-walled off for planning, and the final geometric check also verifies the
-swept path against the discs themselves. Crossing *between* pillars
-off-lattice is `obstacle_planner.py`'s job, not this tool's.
+anywhere, not on the grid). Their pixels are excluded from wall evidence
+(a dark pillar body on a lattice line otherwise reads as a phantom wall),
+and any corridor a disc + robot radius threatens is walled off for planning
+— drawn **orange** in the overlay, distinct from real (red) walls. The
+final geometric check also verifies the swept path against the discs
+themselves. Crossing *between* pillars off-lattice is
+`obstacle_planner.py`'s job, not this tool's — a NO PATH here with orange
+closures around the route usually means "use the obstacle planner".
 
 Useful flags:
 
@@ -145,6 +149,10 @@ rectification bug, fixed).
   it with. `--exit row,col` — the course cell you leave from; **which side
   the gap is on is read from the detected walls**, not guessed.
 - `--start` / `--goal` — the maze start and goal, as in §4.1.1.
+- `--margin` — safety margin (mm) beyond the 75 mm robot radius, used for
+  both planning and the final clearance check (default 5). If the built
+  course is so tight the tool reports no route within margin, drop it
+  consciously: `--margin 2` accepts squeezes down to 77 mm clearance.
 
 Emits **one** `&[Motion]` array for the whole run — start → course entry
 (Arcs) → through the obstacles (Pivot + Line) → exit → goal — plus a

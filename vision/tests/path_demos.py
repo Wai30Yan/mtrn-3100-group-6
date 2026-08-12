@@ -81,7 +81,9 @@ def main():
             print(f"{name}: CORNERS FAILED")
             continue
         warp, _ = ml.rectify(img, corners)
-        grid, scores = ml.detect_walls(warp)
+        pre_cyls = ml.detect_cylinders(warp, (0, 0), 9)
+        grid, scores = ml.detect_walls(
+            warp, exclude=ml.cylinder_mask(warp.shape, pre_cyls))
         # These demos exercise 4.1-style solving; the real 4.1 maze has no
         # cylinders, but some test photos do (4.2 setups). Cylinders sit at
         # arbitrary measured positions, not cell centres — so instead of
@@ -89,7 +91,7 @@ def main():
         # (centre-to-centre segment) the measured disc + robot radius
         # threatens, on a planning copy. Verification below runs against the
         # physical grid + the actual discs.
-        cyls = ml.detect_cylinders(warp, (0, 0), grid.n)
+        cyls = pre_cyls
         plan = ml.wall_off_cylinders(copy.deepcopy(grid), cyls)
         pairs, region_size = pick_pairs(plan)
         print(f"{name}: largest region {region_size} cells, "
