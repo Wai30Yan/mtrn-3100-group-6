@@ -241,14 +241,16 @@ def main():
         # leg 1 ends at the pre-gate cell centre; the course polyline owns
         # the whole crossing (through both gates); leg 2 continues from the
         # post-gate cell centre facing exit_dir.
+        align = ml.leg_first_dir(path2, exit_dir)
         motions = ml.path_to_motions(path1, anchor=start,
                                      start_heading=start[2],
                                      r_turn=args.turn_radius)
         motions += ml.course_to_motions(wps_px, anchor=start,
-                                        exit_dir=exit_dir)
+                                        exit_dir=align)
         motions += ml.path_to_motions(path2, anchor=start,
-                                      start_heading=exit_dir,
+                                      start_heading=align,
                                       r_turn=args.turn_radius)
+        motions = ml.collapse_pivots(motions)
     except ValueError as e:
         raise SystemExit(str(e))
 

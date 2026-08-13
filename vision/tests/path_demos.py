@@ -93,6 +93,16 @@ def main():
         # physical grid + the actual discs.
         cyls = pre_cyls
         plan = ml.wall_off_cylinders(copy.deepcopy(grid), cyls)
+        # a cell whose CENTRE is inside a pillar's threat radius cannot even
+        # be stood in at the required clearance - never pick it as start/goal
+        threat = (75.0 + 5.0) / (ml.CELL_MM / ml.K)
+        r_floor = ml.CYLINDER_RADIUS_M * 1000.0 / (ml.CELL_MM / ml.K)
+        for r in range(grid.n):
+            for c in range(grid.n):
+                cx, cy = (c + 0.5) * ml.K, (r + 0.5) * ml.K
+                if any((cx - q.cx) ** 2 + (cy - q.cy) ** 2
+                       < (max(q.r, r_floor) + threat) ** 2 for q in cyls):
+                    plan.block(r, c)
         pairs, region_size = pick_pairs(plan)
         print(f"{name}: largest region {region_size} cells, "
               f"{len(pairs)} runs")
@@ -103,6 +113,15 @@ def main():
             ok, clear, msg = ml.check_motions(
                 motions, grid, start, goal,
                 circles=ml.cylinders_to_circles(cyls))
+            if not ok:
+                # marginal arc corner-cut near a pillar: same remedy the
+                # CLI suggests - a tighter turn radius
+                motions = ml.path_to_motions(path, anchor=start,
+                                             start_heading=start[2],
+                                             r_turn=0.06)
+                ok, clear, msg = ml.check_motions(
+                    motions, grid, start, goal,
+                    circles=ml.cylinders_to_circles(cyls))
             vis = ml.render_overlay(warp, grid, None, path, start, goal,
                                     cylinders=cyls)
             txt = (f"{name} run {i}: start {start[:2]} {ml.DIR_NAMES[start[2]]}"

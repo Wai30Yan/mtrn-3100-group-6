@@ -1136,14 +1136,19 @@ def solve_hybrid(grid, cylinders, start, goal, region=None, region_cells=5,
                 # leg1 ends at the pre-gate cell centre; the course polyline
                 # owns the whole crossing from there to the post-gate cell
                 # centre; leg2 continues from it.
+                # Aim the course-exit pivot at leg2's ACTUAL first travel
+                # direction - aligning to the gate side and then pivoting
+                # again one motion later put two Pivots in a row.
+                align = leg_first_dir(path2, xside)
                 motions = path_to_motions(path1, anchor=start,
                                           start_heading=start[2],
                                           r_turn=r_turn)
                 motions += course_to_motions(wps, anchor=start,
-                                             exit_dir=xside)
+                                             exit_dir=align)
                 motions += path_to_motions(path2, anchor=start,
-                                           start_heading=xside,
+                                           start_heading=align,
                                            r_turn=r_turn)
+                motions = collapse_pivots(motions)
             except ValueError:
                 continue
             ok, clear, _msg = check_motions(
@@ -1164,6 +1169,23 @@ def solve_hybrid(grid, cylinders, start, goal, region=None, region_cells=5,
     return best[1], best[2]
 
 
+def leg_first_dir(path, fallback):
+    """Compass direction of a cell path's first hop (fallback if < 2 cells)."""
+    if len(path) < 2:
+        return fallback
+    (r0, c0), (r1, c1) = path[0], path[1]
+    return next(d for d in range(4) if (r0 + DR[d], c0 + DC[d]) == (r1, c1))
+
+
+def collapse_pivots(motions):
+    """Drop a Pivot immediately followed by another Pivot (the later one
+    wins - it is the heading the next Line actually needs). Two in-place
+    rotations back to back waste time and stack odometry error."""
+    return [m for i, m in enumerate(motions)
+            if not (m[0] == "pivot" and i + 1 < len(motions)
+                    and motions[i + 1][0] == "pivot")]
+
+
 def wall_off_cylinders(grid, cylinders, k=K, clear_mm=80.0):
     """Solver-grid safety net for photos that contain cylinders: add a wall
     on every corridor (cell-centre-to-centre segment) that a measured disc
@@ -1173,6 +1195,7 @@ def wall_off_cylinders(grid, cylinders, k=K, clear_mm=80.0):
     test per corridor, not a blocked cell. Mutates and returns grid — pass
     a copy if the physical map must stay clean (check_motions needs it)."""
     threat_px = clear_mm / (CELL_MM / k)
+    r_floor = CYLINDER_RADIUS_M * 1000.0 / (CELL_MM / k)   # spec 100 mm dia
     for r, c, d in grid.interior_edges():
         ax, ay = (c + 0.5) * k, (r + 0.5) * k
         bx = ax + (k if d == E else 0)
@@ -1180,8 +1203,11 @@ def wall_off_cylinders(grid, cylinders, k=K, clear_mm=80.0):
         for cyl in cylinders:
             t = max(0.0, min(1.0, ((cyl.cx - ax) * (bx - ax)
                                    + (cyl.cy - ay) * (by - ay)) / k ** 2))
+            # radius clamped to the spec floor, matching check_motions -
+            # an eroded blob must not certify a corridor the check rejects
             if math.hypot(cyl.cx - (ax + t * (bx - ax)),
-                          cyl.cy - (ay + t * (by - ay))) < cyl.r + threat_px:
+                          cyl.cy - (ay + t * (by - ay))) \
+                    < max(cyl.r, r_floor) + threat_px:
                 grid.add_wall(r, c, d)
     return grid
 
