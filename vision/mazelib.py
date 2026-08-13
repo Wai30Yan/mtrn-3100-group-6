@@ -83,9 +83,26 @@ def auto_corners(img):
     """Find the maze outline automatically: the floor is the largest bright
     region; fit lines to its four straight sides (skipping the chamfered
     corners) and intersect them. Refined later by lattice phase, so ~1/3 cell
-    of error here is fine."""
+    of error here is fine.
+
+    Wide frames can put concrete (and bystanders' white shirts) above the
+    first Otsu threshold, merging everything into one blob whose sides are
+    nonsense. If the first attempt fails validation, retry once at a
+    second-stage threshold (Otsu over just the bright pixels), which
+    separates floor from concrete."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, bright = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    t1, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    t2, _ = cv2.threshold(gray[gray > t1], 0, 255,
+                          cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    for thr in (t1, t2):
+        quad = _corners_at_threshold(img, gray, thr)
+        if quad is not None:
+            return quad
+    return None
+
+
+def _corners_at_threshold(img, gray, thr):
+    bright = (gray > thr).astype(np.uint8) * 255
     n, lab, stats, _ = cv2.connectedComponentsWithStats(bright)
     if n < 2:
         return None
@@ -151,6 +168,16 @@ def auto_corners(img):
     lens = [float(np.hypot(*(quad[i] - quad[(i + 1) % 4]))) for i in range(4)]
     if max(lens) > 1.45 * min(lens):
         return None
+    # Opposite sides must be near-parallel: the demo camera is overhead, so
+    # a legit maze quad has < ~4 deg of perspective divergence. A quad cut
+    # through the maze interior (occluded edge, person leaning in) shows
+    # 8+ deg and warps into a plausible-looking but wrongly-scaled lattice
+    # that the downstream gates cannot always catch.
+    ang = [math.atan2(*(quad[(i + 1) % 4] - quad[i])[::-1]) for i in range(4)]
+    for a, b in ((0, 2), (1, 3)):
+        d = abs((ang[a] - ang[b] + math.pi / 2) % math.pi - math.pi / 2)
+        if math.degrees(d) > 6.0:
+            return None
     return quad
 
 
