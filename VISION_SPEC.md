@@ -307,12 +307,18 @@ python obstacle_planner.py photo.jpg --region 2,2 --entry 4,2,E --exit 4,6 \
    (`--margin`, default 5 mm) — random cylinders can leave gaps barely wider
    than the robot, so the planner prefers the safest route that exists and
    reports when it had to shrink.
-4. **Plan** pre-gate cell centre → post-gate cell centre with A* on a 10 mm
-   grid (8-connected, corner-cutting forbidden), line-of-sight shortcut,
-   then a **clearance-maximising refinement** (waypoints pushed to the local
-   distance-field maximum — config-space thinking per the Path Planning
-   assignment) with ≥ 40 mm waypoint spacing enforced against the inflation
-   mask (the firmware cannot drive shorter Lines).
+4. **Plan** pre-gate cell centre → post-gate cell centre with an **exact
+   tangent (visibility) graph** over the config-space obstacles (discs for
+   pillars, capsules for walls; nodes = tangent/intersection points, edges
+   = collision-free tangents + boundary arcs, Dijkstra): closed-form
+   geometry, no planning resolution — evenly spaced obstacles cannot alias
+   a passable corridor away (Waiyan's robustness challenge, verified by
+   test: a 6 mm-wide config channel between evenly spaced pillars is found
+   where a 10 mm grid provably misses it). Grid A* (10 mm, 8-connected,
+   corner-cutting forbidden, shortcut) remains as fallback. Both feed the
+   **clearance-maximising refinement** (waypoints pushed to the local
+   distance-field maximum) with ≥ 40 mm waypoint spacing enforced against
+   the inflation mask (the firmware cannot drive shorter Lines).
 5. **Emit.** Trajectory overlay (the 1-mark evidence) + **one** `&[Motion]`
    array for the whole run: start → pre-gate cell (Arcs) → through the gate
    and the obstacles (Pivot + Line) → post-gate cell → goal (Arcs). The

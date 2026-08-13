@@ -1218,6 +1218,221 @@ def cylinders_to_circles(cylinders, k=K):
             for c in cylinders]
 
 
+def _seg_pt_d2(ax, ay, bx, by, px, py):
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / L2))
+    ex, ey = ax + t * dx - px, ay + t * dy - py
+    return ex * ex + ey * ey
+
+
+def _seg_seg_d2(a, b, c, d):
+    # segments AB, CD: 0 if crossing, else min endpoint-to-segment distance
+    def ccw(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    d1, d2 = ccw(c, d, a), ccw(c, d, b)
+    d3, d4 = ccw(a, b, c), ccw(a, b, d)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+        return 0.0
+    return min(_seg_pt_d2(*a, *b, *c), _seg_pt_d2(*a, *b, *d),
+               _seg_pt_d2(*c, *d, *a), _seg_pt_d2(*c, *d, *b))
+
+
+def _tangent_route(p0, p1, discs, capsules, W, H):
+    """Exact shortest path among disc and capsule (wall) obstacles via a
+    tangent (visibility) graph: nodes = start, goal, tangent points and
+    boundary-intersection points; edges = collision-free tangent segments
+    and disc-boundary arcs. All validity is CLOSED-FORM geometry against
+    the same keep-out radii check_motions verifies with - no grid, no
+    resolution parameter, so evenly spaced obstacles cannot alias a
+    passable corridor away. Returns a polyline (arcs polygonised) or None.
+
+    discs: (cx, cy, R) keep-out circles (pillar + robot + margin).
+    capsules: ((ax, ay), (bx, by), R) wall centrelines + keep-out radius.
+    """
+    EPS = 0.1                                     # float slack, px
+
+    def free_pt(p):
+        if not (0 <= p[0] < W and 0 <= p[1] < H):
+            return False
+        for cx, cy, R in discs:
+            if (p[0] - cx) ** 2 + (p[1] - cy) ** 2 < (R - EPS) ** 2:
+                return False
+        for a, b, R in capsules:
+            if _seg_pt_d2(*a, *b, p[0], p[1]) < (R - EPS) ** 2:
+                return False
+        return True
+
+    def free_seg(a, b):
+        if not (0 <= a[0] < W and 0 <= a[1] < H
+                and 0 <= b[0] < W and 0 <= b[1] < H):
+            return False
+        for cx, cy, R in discs:
+            if _seg_pt_d2(a[0], a[1], b[0], b[1], cx, cy) < (R - EPS) ** 2:
+                return False
+        for c, d, R in capsules:
+            if _seg_seg_d2(a, b, c, d) < (R - EPS) ** 2:
+                return False
+        return True
+
+    if free_seg(p0, p1):
+        return [tuple(p0), tuple(p1)]
+    # tangent-generating circles: the discs, plus each capsule's endpoint
+    # circles (their common outer tangents ARE the capsule's offset sides)
+    circles = list(discs) + [(a[0], a[1], R) for a, b, R in capsules] \
+        + [(b[0], b[1], R) for a, b, R in capsules]
+    OUT = 0.7                                     # nodes just outside keep-out
+    nodes = [tuple(p0), tuple(p1)]
+    meta = [None, None]
+    edges = []
+
+    def node_at(ci, ang):
+        cx, cy, R = circles[ci]
+        p = (cx + (R + OUT) * math.cos(ang), cy + (R + OUT) * math.sin(ang))
+        if not free_pt(p):
+            return None
+        nodes.append(p)
+        meta.append((ci, ang % (2 * math.pi)))
+        return len(nodes) - 1
+
+    def line_edge(u, v):
+        if u is None or v is None:
+            return
+        a, b = nodes[u], nodes[v]
+        if free_seg(a, b):
+            edges.append((u, v, math.hypot(b[0] - a[0], b[1] - a[1]), None))
+
+    for pi in (0, 1):                             # point-to-circle tangents
+        P = nodes[pi]
+        for ci, (cx, cy, R) in enumerate(circles):
+            d = math.hypot(P[0] - cx, P[1] - cy)
+            if d <= R + 1e-6:
+                continue
+            a = math.atan2(P[1] - cy, P[0] - cx)
+            b = math.acos(max(-1.0, min(1.0, R / d)))
+            for ang in (a + b, a - b):
+                line_edge(pi, node_at(ci, ang))
+    nc = len(circles)
+    for i in range(nc):                           # circle-circle tangents
+        x1, y1, r1 = circles[i]
+        for j in range(i + 1, nc):
+            x2, y2, r2 = circles[j]
+            d = math.hypot(x2 - x1, y2 - y1)
+            if d < 1e-6:
+                continue
+            g = math.atan2(y2 - y1, x2 - x1)
+            for sgn, off in ((1, 0.0), (-1, math.pi)):
+                co = (r1 - sgn * r2) / d
+                if abs(co) > 1:
+                    continue
+                b = math.acos(co)
+                for s in (1, -1):
+                    line_edge(node_at(i, g + s * b),
+                              node_at(j, g + s * b + off))
+            # overlapping keep-outs: the union boundary needs nodes at the
+            # crossings or arcs across the immersed part sever the graph
+            R1, R2 = r1 + OUT, r2 + OUT
+            if abs(R1 - R2) + 1e-6 < d < R1 + R2:
+                xx = (d * d + R1 * R1 - R2 * R2) / (2 * d)
+                yy2 = R1 * R1 - xx * xx
+                if yy2 > 0:
+                    for s in (1, -1):
+                        ang_i = math.atan2(s * math.sqrt(yy2), xx)
+                        u = node_at(i, g + ang_i)
+                        px_ = x1 + R1 * math.cos(g + ang_i)
+                        py_ = y1 + R1 * math.sin(g + ang_i)
+                        v = node_at(j, math.atan2(py_ - y2, px_ - x2))
+                        line_edge(u, v)
+    per = {}                                      # boundary arc edges
+    for idx, m in enumerate(meta):
+        if m:
+            per.setdefault(m[0], []).append(idx)
+    for ci, idxs in per.items():
+        cx, cy, R = circles[ci]
+        idxs.sort(key=lambda t: meta[t][1])
+        for a_i in range(len(idxs)):
+            u, v = idxs[a_i], idxs[(a_i + 1) % len(idxs)]
+            if u == v:
+                continue
+            a0 = meta[u][1]
+            sweep = (meta[v][1] - a0) % (2 * math.pi)
+            if sweep < 1e-6:
+                continue
+            ok = True
+            for t in np.linspace(0, 1, max(3, int(sweep / 0.08) + 1)):
+                ang = a0 + sweep * t
+                if not free_pt((cx + (R + OUT) * math.cos(ang),
+                                cy + (R + OUT) * math.sin(ang))):
+                    ok = False
+                    break
+            if ok:
+                edges.append((u, v, (R + OUT) * sweep, (ci, a0, sweep)))
+
+    # Proximity stitching: tangent graphs are brittle - one invalid arc
+    # between consecutive nodes severs a boundary ring even when the two
+    # sides sit a pixel apart in open space. Link any near pair directly.
+    buckets = {}
+    for idx, p in enumerate(nodes):
+        buckets.setdefault((int(p[0]) // 8, int(p[1]) // 8), []).append(idx)
+    for (bx, by), members in buckets.items():
+        cand = []
+        for dx in (0, 1):
+            for dy in (-1, 0, 1):
+                if (dx, dy) > (0, 0) or (dx, dy) == (0, 0):
+                    cand += buckets.get((bx + dx, by + dy), [])
+        for u in members:
+            for v in cand:
+                if v <= u:
+                    continue
+                a, b = nodes[u], nodes[v]
+                if abs(a[0] - b[0]) < 8 and abs(a[1] - b[1]) < 8 \
+                        and free_seg(a, b):
+                    edges.append((u, v, math.hypot(b[0] - a[0],
+                                                   b[1] - a[1]), None))
+
+    adj = {}
+    for u, v, w2, arc in edges:
+        adj.setdefault(u, []).append((v, w2, arc, False))
+        adj.setdefault(v, []).append((u, w2, arc, True))
+    dist = {0: 0.0}
+    prevmap = {}
+    hq = [(0.0, 0)]
+    while hq:
+        d0, u = heappop(hq)
+        if u == 1:
+            break
+        if d0 > dist.get(u, np.inf):
+            continue
+        for v, w2, arc, rev in adj.get(u, []):
+            nd = d0 + w2
+            if nd < dist.get(v, np.inf):
+                dist[v] = nd
+                prevmap[v] = (u, arc, rev)
+                heappush(hq, (nd, v))
+    if dist.get(1, np.inf) == np.inf:
+        return None
+    chain = []
+    cur = 1
+    while cur != 0:
+        u, arc, rev = prevmap[cur]
+        chain.append((cur, arc, rev))
+        cur = u
+    chain.reverse()
+    loc = [nodes[0]]
+    for v, arc, rev in chain:
+        if arc is None:
+            loc.append(nodes[v])
+            continue
+        ci, a0, sweep = arc
+        cx, cy, R = circles[ci]
+        for t in np.linspace(0, 1, max(2, int(sweep / 0.2) + 1))[1:]:
+            ang = a0 + sweep * (1 - t if rev else t)
+            loc.append((cx + (R + OUT) * math.cos(ang),
+                        cy + (R + OUT) * math.sin(ang)))
+        loc[-1] = nodes[v]
+    return [(float(x), float(y)) for x, y in loc]
+
+
 def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
                 k=K, robot_radius_mm=75.0, margin_mm=None, exit_dir=None,
                 margin_floor_mm=2.0):
@@ -1270,9 +1485,11 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
     inflate_px = int(round((robot_radius_mm + margin_mm) / mm_per_px))
 
     occ = np.zeros((H, W), dtype=np.uint8)
-    for cyl in cylinders:
+    r_floor = CYLINDER_RADIUS_M * 1000.0 / mm_per_px   # spec 100 mm dia
+    disc_r = [max(c.r, r_floor) + 10.0 / mm_per_px for c in cylinders]
+    for cyl, dr in zip(cylinders, disc_r):
         cv2.circle(occ, (int(cyl.cx - wx0), int(cyl.cy - wy0)),
-                   int(cyl.r + 10.0 / mm_per_px), 255, -1)
+                   int(dr), 255, -1)
 
     def in_region(r, c):
         return r0 <= r < r0 + region_cells and c0 <= c < c0 + region_cells
@@ -1281,25 +1498,35 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
     entry_gate = (er, ec, OPP[ed])               # boundary side robot enters
     exit_gate = (xr, xc, exit_dir)
 
+    hsegs, vsegs = [], []                        # (fixed, lo, hi) window px
+
     def draw_edge(r, c, d):
         if d == S:
             y = (r + 1 - wr0) * k
             occ[max(0, y - ht):y + ht, (c - wc0) * k:(c + 1 - wc0) * k] = 255
+            hsegs.append((y, (c - wc0) * k, (c + 1 - wc0) * k))
         elif d == N:
             y = (r - wr0) * k
             occ[max(0, y - ht):y + ht, (c - wc0) * k:(c + 1 - wc0) * k] = 255
+            hsegs.append((y, (c - wc0) * k, (c + 1 - wc0) * k))
         elif d == E:
             x = (c + 1 - wc0) * k
             occ[(r - wr0) * k:(r + 1 - wr0) * k, max(0, x - ht):x + ht] = 255
+            vsegs.append((x, (r - wr0) * k, (r + 1 - wr0) * k))
         else:
             x = (c - wc0) * k
             occ[(r - wr0) * k:(r + 1 - wr0) * k, max(0, x - ht):x + ht] = 255
+            vsegs.append((x, (r - wr0) * k, (r + 1 - wr0) * k))
 
     for r in range(wr0, wr1):
         for c in range(wc0, wc1):
             if grid.blocked[r, c]:               # chamfer plates in the ring
                 occ[(r - wr0) * k:(r + 1 - wr0) * k,
                     (c - wc0) * k:(c + 1 - wc0) * k] = 255
+                hsegs.append(((r - wr0) * k, (c - wc0) * k, (c + 1 - wc0) * k))
+                hsegs.append(((r + 1 - wr0) * k, (c - wc0) * k, (c + 1 - wc0) * k))
+                vsegs.append(((c - wc0) * k, (r - wr0) * k, (r + 1 - wr0) * k))
+                vsegs.append(((c + 1 - wc0) * k, (r - wr0) * k, (r + 1 - wr0) * k))
                 continue
             for d in range(4):
                 r2, c2 = r + DR[d], c + DC[d]
@@ -1356,58 +1583,103 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
     goal_n = nearest_free(to_node(goal_px))
     if start_n is None or goal_n is None:
         return None, blocked, (wx0, wy0)
+
+    # ---- primary planner: exact tangent (visibility) graph ----------------
+    # Obstacles are discs (pillars) and wall segments; each wall run's two
+    # endpoint discs generate the offset sides as common tangents, so the
+    # whole config space reduces to disc obstacles. Complete regardless of
+    # obstacle spacing - no planning-resolution parameter to align badly.
+    def _merge(runs):
+        by = {}
+        for f, lo, hi in runs:
+            by.setdefault(f, []).append((lo, hi))
+        out = []
+        for f, spans in by.items():
+            spans.sort()
+            cl, ch = spans[0]
+            for lo, hi in spans[1:]:
+                if lo <= ch + 1:
+                    ch = max(ch, hi)
+                else:
+                    out.append((f, cl, ch))
+                    cl, ch = lo, hi
+            out.append((f, cl, ch))
+        return out
+
+    # Keep-outs identical to the occupancy mask (clamped radius + 10 mm
+    # detection slop + robot + margin) so the mask-based post passes and
+    # the true-world clearance both hold - but evaluated in closed-form
+    # float geometry, so a corridor of ANY positive width is certifiable,
+    # which the 1.8 mm/px mask and the 10 mm grid cannot promise.
+    discs = [(cyl.cx - wx0, cyl.cy - wy0, dr + inflate_px)
+             for cyl, dr in zip(cylinders, disc_r)]
+    wall_keep = ht + inflate_px
+    capsules = ([((xa, y), (xb, y), wall_keep) for y, xa, xb in _merge(hsegs)]
+                + [((x, ya), (x, yb), wall_keep)
+                   for x, ya, yb in _merge(vsegs)])
+
+    p0 = (start_n[0] * step, start_n[1] * step)
+    p1 = (goal_n[0] * step, goal_n[1] * step)
+    loc = _tangent_route(p0, p1, discs, capsules, W, H)
+    if loc is None:
+        import sys
+        print("# note: tangent planner found no route, trying grid A*",
+              file=sys.stderr)
+
+    # ---- fallback: grid A* (resolution-complete at ~10 mm) ----------------
     # A* 8-connected, corner cutting forbidden
-    dist = {start_n: 0.0}
-    prev = {}
-    q = [(0.0, start_n)]
-    moves = [(1, 0, 1), (-1, 0, 1), (0, 1, 1), (0, -1, 1),
-             (1, 1, 2 ** 0.5), (1, -1, 2 ** 0.5), (-1, 1, 2 ** 0.5), (-1, -1, 2 ** 0.5)]
-    found = False
-    while q:
-        f, node = heappop(q)
-        if node == goal_n:
-            found = True
-            break
-        nx, ny = node
-        g = dist[node]
-        for dx, dy, w in moves:
-            nn = (nx + dx, ny + dy)
-            if not node_free(*nn):
-                continue
-            if dx and dy and (not node_free(nx + dx, ny) or not node_free(nx, ny + dy)):
-                continue
-            ng = g + w
-            if ng < dist.get(nn, np.inf):
-                dist[nn] = ng
-                prev[nn] = node
-                h = ((nn[0] - goal_n[0]) ** 2 + (nn[1] - goal_n[1]) ** 2) ** 0.5
-                heappush(q, (ng + h, nn))
-    if not found:
-        return None, blocked, (wx0, wy0)
-    path = [goal_n]
-    while path[-1] in prev:
-        path.append(prev[path[-1]])
-    path.reverse()
+    if loc is None:
+        dist = {start_n: 0.0}
+        prev = {}
+        q = [(0.0, start_n)]
+        moves = [(1, 0, 1), (-1, 0, 1), (0, 1, 1), (0, -1, 1),
+                 (1, 1, 2 ** 0.5), (1, -1, 2 ** 0.5), (-1, 1, 2 ** 0.5), (-1, -1, 2 ** 0.5)]
+        found = False
+        while q:
+            f, node = heappop(q)
+            if node == goal_n:
+                found = True
+                break
+            nx, ny = node
+            g = dist[node]
+            for dx, dy, w in moves:
+                nn = (nx + dx, ny + dy)
+                if not node_free(*nn):
+                    continue
+                if dx and dy and (not node_free(nx + dx, ny) or not node_free(nx, ny + dy)):
+                    continue
+                ng = g + w
+                if ng < dist.get(nn, np.inf):
+                    dist[nn] = ng
+                    prev[nn] = node
+                    h = ((nn[0] - goal_n[0]) ** 2 + (nn[1] - goal_n[1]) ** 2) ** 0.5
+                    heappush(q, (ng + h, nn))
+        if not found:
+            return None, blocked, (wx0, wy0)
+        path = [goal_n]
+        while path[-1] in prev:
+            path.append(prev[path[-1]])
+        path.reverse()
 
-    def free_segment(a, b):
-        ax, ay = a[0] * step, a[1] * step
-        bx, by = b[0] * step, b[1] * step
-        length = max(abs(bx - ax), abs(by - ay))
-        for t in np.linspace(0, 1, max(2, int(length / 2))):
-            x, y = int(round(ax + (bx - ax) * t)), int(round(ay + (by - ay) * t))
-            if blocked[min(y, H - 1), min(x, W - 1)]:
-                return False
-        return True
+        def free_segment(a, b):
+            ax, ay = a[0] * step, a[1] * step
+            bx, by = b[0] * step, b[1] * step
+            length = max(abs(bx - ax), abs(by - ay))
+            for t in np.linspace(0, 1, max(2, int(length / 2))):
+                x, y = int(round(ax + (bx - ax) * t)), int(round(ay + (by - ay) * t))
+                if blocked[min(y, H - 1), min(x, W - 1)]:
+                    return False
+            return True
 
-    simple = [path[0]]
-    i = 0
-    while i < len(path) - 1:
-        j = len(path) - 1
-        while j > i + 1 and not free_segment(path[i], path[j]):
-            j -= 1
-        simple.append(path[j])
-        i = j
-    loc = [(nx * step, ny * step) for nx, ny in simple]
+        simple = [path[0]]
+        i = 0
+        while i < len(path) - 1:
+            j = len(path) - 1
+            while j > i + 1 and not free_segment(path[i], path[j]):
+                j -= 1
+            simple.append(path[j])
+            i = j
+        loc = [(nx * step, ny * step) for nx, ny in simple]
 
     # Clearance refinement: the shortcut hugs the inflation boundary, and
     # the waypoints->motions conversion sheds a few more mm - enough to

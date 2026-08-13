@@ -79,7 +79,10 @@ and any corridor a disc + robot radius threatens is walled off for planning
 and goal because the obstacle course is in the way, the tool switches by
 itself: it locates the 5×5 course (most cylinders, no interior walls),
 reads its gates off the detected walls, runs lattice legs up to the course,
-and plans the crossing continuously — occupancy grid, config-space
+and plans the crossing continuously — an exact tangent (visibility) graph
+over the config-space obstacles (complete: no planning resolution, so
+evenly spaced pillars cannot alias a passable corridor away), with grid A*
+as fallback — built on config-space
 dilation by robot radius + margin, A*, shortcutting, then a
 clearance-maximising refinement (the architecture from the Path Planning
 assignment). Every entry/exit gate pair is tried and each candidate is
