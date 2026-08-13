@@ -172,8 +172,10 @@ def main():
             x0, y0 = rg[1] * ml.K, rg[0] * ml.K
             cv2.rectangle(vis, (x0, y0), (x0 + 5 * ml.K, y0 + 5 * ml.K),
                           (255, 0, 255), 2)
-            for pth in (list(info["path1"]) + [(er, ec)],
-                        [(xr, xc)] + list(info["path2"])):
+            # legs end/start at the pre/post-gate cells; the course polyline
+            # owns the gate transits (appending the gate cells here drew
+            # phantom back-and-forth hops the robot never drives)
+            for pth in (info["path1"], info["path2"]):
                 p = [(c * ml.K + ml.K // 2, r * ml.K + ml.K // 2)
                      for r, c in pth]
                 for a, b in zip(p, p[1:]):

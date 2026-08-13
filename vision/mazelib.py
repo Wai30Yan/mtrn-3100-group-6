@@ -1463,6 +1463,34 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
         else:
             i += 1
     refine()
+    # Kill zigzag vertices LAST: A* + refinement can leave a sharp
+    # overshoot-and-reverse wiggle (drive past the turn point, pivot
+    # ~120deg+, come back). For any vertex turning more than ~100deg:
+    # drop it if the bridge respects the full inflation; otherwise trim
+    # the overshoot by sliding the vertex back along its incoming segment
+    # to the earliest point that still sees the next waypoint.
+    i = 1
+    while i < len(loc) - 1:
+        v1 = (loc[i][0] - loc[i - 1][0], loc[i][1] - loc[i - 1][1])
+        v2 = (loc[i + 1][0] - loc[i][0], loc[i + 1][1] - loc[i][1])
+        n1, n2 = math.hypot(*v1), math.hypot(*v2)
+        sharp = n1 > 1e-9 and n2 > 1e-9 and \
+            (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2) < -0.17
+        if not sharp:
+            i += 1
+            continue
+        if px_free_seg(loc[i - 1], loc[i + 1]):
+            loc.pop(i)
+            i = max(1, i - 1)
+            continue
+        for t in np.linspace(0.15, 0.9, 6):
+            cand = (loc[i - 1][0] + v1[0] * t, loc[i - 1][1] + v1[1] * t)
+            if px_free_seg(cand, loc[i + 1]):
+                if math.hypot(cand[0] - loc[i][0],
+                              cand[1] - loc[i][1]) > 2:
+                    loc[i] = cand
+                break
+        i += 1
 
     wps = [(x + wx0, y + wy0) for x, y in loc]
     return wps, blocked, (wx0, wy0)
