@@ -74,7 +74,9 @@ impl MotionManager {
                 final_speed,
             } => {
                 let path_delta = final_position / self.current_pose.translation;
-                if path_delta.vector.norm() <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT {
+                if path_delta.vector.norm()
+                    <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT
+                {
                     self.current_pose.translation = final_position;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;
@@ -105,7 +107,9 @@ impl MotionManager {
                 let rot_delta = final_pose.rotation / self.current_pose.rotation;
                 let mut turn_rate = 0.0;
 
-                if path_delta.vector.norm() <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT {
+                if path_delta.vector.norm()
+                    <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT
+                {
                     self.current_pose = final_pose;
                     self.current_speed = final_speed;
                     self.target = Motion::Idle;

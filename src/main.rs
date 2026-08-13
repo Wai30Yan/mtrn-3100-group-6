@@ -92,6 +92,12 @@ const LIDAR_ADDR_F: u8 = 0x29;
 
 const TRAVEL_SPEED: f32 = 0.2;
 
+enum RelativeMotion {
+    Forward,
+    Left,
+    Right,
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe { Peripherals::steal() }
@@ -309,48 +315,12 @@ fn main() -> ! {
     let mut display = Display::new(RefCellDevice::new(&i2c));
     display.print("Hello World!\n");
 
-    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.090, 0.270), 0.0);
-    let solution: &[Motion] = &[
-        Motion::Line {
-            final_position: Translation2::new(0.360, 0.270),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.450, 0.360), f32::consts::FRAC_PI_2),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Line {
-            final_position: Translation2::new(0.450, 0.540),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.540, 0.630), 0.0),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.630, 0.540), -f32::consts::FRAC_PI_2),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Line {
-            final_position: Translation2::new(0.630, 0.360),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.720, 0.270), 0.0),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.810, 0.180), -f32::consts::FRAC_PI_2),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Arc {
-            final_pose: Isometry2::new(Vector2::new(0.720, 0.090), -f32::consts::PI),
-            final_speed: TRAVEL_SPEED,
-        },
-        Motion::Line {
-            final_position: Translation2::new(0.630, 0.090),
-            final_speed: TRAVEL_SPEED,
-        },
+    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0, 0.0), 0.0);
+    let motions = [
+        RelativeMotion::Forward,
+        RelativeMotion::Left,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
     ];
     let mut solution_step: usize = 0;
 
@@ -410,8 +380,29 @@ fn main() -> ! {
             observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
         }*/
 
-        if motion_manager.idle() && solution_step < solution.len() {
-            motion_manager.set_target(solution[solution_step]);
+        if motion_manager.idle() && solution_step < motions.len() {
+            let speed = if solution_step == motions.len() - 1 {
+                0.0
+            } else {
+                TRAVEL_SPEED
+            };
+            motion_manager.set_target(match motions[solution_step] {
+                RelativeMotion::Forward => Motion::Line {
+                    final_position: (motion_manager.pose() * Translation2::new(0.180, 0.0))
+                        .translation,
+                    final_speed: speed,
+                },
+                RelativeMotion::Left => Motion::Arc {
+                    final_pose: motion_manager.pose()
+                        * Isometry2::new(Vector2::new(0.090, 0.090), f32::consts::FRAC_PI_2),
+                    final_speed: speed,
+                },
+                RelativeMotion::Right => Motion::Arc {
+                    final_pose: motion_manager.pose()
+                        * Isometry2::new(Vector2::new(0.090, -0.090), -f32::consts::FRAC_PI_2),
+                    final_speed: speed,
+                },
+            });
             solution_step += 1;
         }
 
