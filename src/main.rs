@@ -10,7 +10,7 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32, matches, panic::PanicInfo, todo};
+use core::{cell::RefCell, f32, matches, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
@@ -35,8 +35,7 @@ use stm32g4xx_hal::{
 
 use crate::{
     display::Display,
-    encoder::{Encoder, EncoderInstance},
-    imu::Imu,
+    encoder::EncoderInstance,
     lidar::Lidar,
     motion_manager::{Motion, MotionManager},
     motor::Motor,
@@ -48,7 +47,6 @@ extern crate nalgebra as na;
 
 pub mod display;
 pub mod encoder;
-pub mod imu;
 pub mod lidar;
 pub mod motion_manager;
 pub mod motor;
@@ -90,7 +88,8 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 0.2;
+const TRAVEL_SPEED: f32 = 0.12;
+const ENABLE_LIDAR: bool = true;
 
 enum RelativeMotion {
     Forward,
@@ -199,7 +198,7 @@ fn main() -> ! {
     unsafe { NVIC::unmask(interrupt::TIM7) };
     // Give time for hardware to initialise
     delay.delay_ms(500);
-    print!("Initialisation Complete!\r\n");
+    print!("Low Level Initialisation Complete!\r\n");
 
     // Reset and enable the timer peripheral.
     rcc.apb1rstr1().modify(|_, w| w.tim2rst().bit(true));
@@ -294,8 +293,6 @@ fn main() -> ! {
     let mut encoder_left = EncoderInstance::new(dp.TIM4, false, &mut rcc);
     let mut encoder_right = EncoderInstance::new(dp.TIM3, true, &mut rcc);
 
-    let mut imu = Imu::new(RefCellDevice::new(&i2c));
-
     let lidar_l_en = gpiob
         .pb12
         .into_open_drain_output_in_state(PinState::Low)
@@ -313,37 +310,32 @@ fn main() -> ! {
     let mut lidar_f = Lidar::new(RefCellDevice::new(&i2c), lidar_f_en, LIDAR_ADDR_F);
 
     let mut display = Display::new(RefCellDevice::new(&i2c));
-    display.print("Hello World!\n");
 
-    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0, 0.0), 0.0);
+    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0, 0.090), 0.0);
     let motions = [
+        RelativeMotion::Right,
+        RelativeMotion::Right,
         RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Left,
+        RelativeMotion::Right,
+        RelativeMotion::Left,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
         RelativeMotion::Left,
         RelativeMotion::Forward,
         RelativeMotion::Right,
+        RelativeMotion::Left,
+        RelativeMotion::Left,
+        RelativeMotion::Forward,
     ];
     let mut solution_step: usize = 0;
 
     let mut observer = StateObserver::new(initial_pose);
     let mut motion_manager = MotionManager::new(initial_pose);
 
-    let mut gyro_bias = 0.0;
-    let mut gyro = 0.0;
-
-    // Let the state observer settle
-    for i in 1..100 {
-        encoder_left.update();
-        encoder_right.update();
-        imu.update();
-        observer.update(&imu, &encoder_left, &encoder_right);
-
-        gyro_bias += imu.gz() / 100.0;
-
-        display.clear();
-        display.print(&format!("{}\n", i));
-
-        block!(period_timer.wait()).unwrap();
-    }
+    display.print("General Initialisation Complete!\n");
+    delay.delay_ms(500);
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -351,15 +343,14 @@ fn main() -> ! {
      * pretty simple for us to define our own main loop.
      */
     loop {
-        imu.update();
-
         encoder_left.update();
         encoder_right.update();
 
-        observer.update(&imu, &encoder_left, &encoder_right);
+        observer.update(&encoder_left, &encoder_right);
 
-        /*if matches!(lidar_l.update(), nb::Result::Ok(()))
+        if matches!(lidar_l.update(), nb::Result::Ok(()))
             && let Some(dist) = lidar_l.distance()
+            && ENABLE_LIDAR
         {
             observer.lidar_update(
                 dist,
@@ -368,6 +359,7 @@ fn main() -> ! {
         }
         if matches!(lidar_r.update(), nb::Result::Ok(()))
             && let Some(dist) = lidar_r.distance()
+            && ENABLE_LIDAR
         {
             observer.lidar_update(
                 dist,
@@ -376,9 +368,10 @@ fn main() -> ! {
         }
         if matches!(lidar_f.update(), nb::Result::Ok(()))
             && let Some(dist) = lidar_f.distance()
+            && ENABLE_LIDAR
         {
             observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
-        }*/
+        }
 
         if motion_manager.idle() && solution_step < motions.len() {
             let speed = if solution_step == motions.len() - 1 {
@@ -420,19 +413,6 @@ fn main() -> ! {
             error.translation.y,
             error.rotation.angle(),
         ));
-        gyro += (imu.gz() - gyro_bias) * DT;
-        display.print(&format!("{:.2}\n", gyro));
-
-        /*display.clear();
-        let p = motion_manager.pose();
-        let a = observer.pose();
-        display.print(&format!("{:?}\n", p.translation.vector[0]));
-        display.print(&format!("{:?}\n", p.translation.vector[1]));
-        display.print(&format!("{:?}\n", p.rotation.angle()));
-        display.print(&format!("{:?}\n", a.translation.vector[0]));
-        display.print(&format!("{:?}\n", a.translation.vector[1]));
-        display.print(&format!("{:?}\n", a.rotation.angle()));
-        */
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can

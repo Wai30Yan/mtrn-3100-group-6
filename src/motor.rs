@@ -13,7 +13,7 @@ pub struct Motor<'a> {
 }
 
 const KV: f32 = 0.040;
-const KS: f32 = 0.008;
+const KS: f32 = 0.018;
 const MIN_DUTY: u16 = 16;
 const MAX_SLEW: f32 = 50.0 * DT;
 

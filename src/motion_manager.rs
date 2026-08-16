@@ -48,14 +48,16 @@ pub struct MotionManager {
 
 const BASIC_ANGULAR_GAIN: f32 = 10.0;
 const BASIC_LINEAR_GAIN: f32 = 5.0;
-const BASIC_CROSS_GAIN: f32 = 3.0;
+const BASIC_CROSS_GAIN: f32 = 10.0;
 
 const MAX_VELOCITY: f32 = TRAVEL_SPEED;
 const MAX_ACCELERATION: f32 = TRAVEL_SPEED / 2.0;
 const MAX_ANGULAR: f32 = 1.5;
 const OVERSHOOT_GAIN: f32 = 0.2;
+const FOLLOW_EPSILON: f32 = 0.005;
 
-const EPSILON: f32 = 0.01;
+const PIVOT_ANGULAR_GAIN: f32 = 50.0;
+const PIVOT_EPSILON: f32 = 0.03;
 
 impl MotionManager {
     pub fn new(pose: Isometry2<f32>) -> Self {
@@ -75,7 +77,8 @@ impl MotionManager {
             } => {
                 let path_delta = final_position / self.current_pose.translation;
                 if path_delta.vector.norm()
-                    <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT
+                    <= (f32::max(self.current_speed.abs(), final_speed.abs()) * DT)
+                        .hypot(FOLLOW_EPSILON)
                 {
                     self.current_pose.translation = final_position;
                     self.current_speed = final_speed;
@@ -108,7 +111,8 @@ impl MotionManager {
                 let mut turn_rate = 0.0;
 
                 if path_delta.vector.norm()
-                    <= f32::max(self.current_speed.abs(), final_speed.abs()) * DT
+                    <= (f32::max(self.current_speed.abs(), final_speed.abs()) * DT)
+                        .hypot(FOLLOW_EPSILON)
                 {
                     self.current_pose = final_pose;
                     self.current_speed = final_speed;
@@ -147,13 +151,13 @@ impl MotionManager {
 
                 let error = (rotation / observed_pose.rotation).angle();
 
-                if error.abs() <= EPSILON {
+                if error.abs() <= PIVOT_EPSILON {
                     self.target = Motion::Idle;
                 }
 
                 ChassisSpeeds {
                     vx: 0.0,
-                    omega: (BASIC_ANGULAR_GAIN * error).clamp_magnitude(MAX_ANGULAR),
+                    omega: (PIVOT_ANGULAR_GAIN * error).clamp_magnitude(MAX_ANGULAR),
                 }
             }
         }
@@ -197,7 +201,8 @@ impl MotionManager {
     ) -> ChassisSpeeds {
         let error = observed_pose.inv_mul(&desired_pose);
         ChassisSpeeds {
-            vx: desired_speeds.vx + BASIC_LINEAR_GAIN * error.translation.x,
+            vx: (desired_speeds.vx + BASIC_LINEAR_GAIN * error.translation.x)
+                .clamp(0.0, f32::INFINITY),
             omega: desired_speeds.omega
                 + BASIC_ANGULAR_GAIN * error.rotation.angle()
                 + BASIC_CROSS_GAIN * error.translation.y,

@@ -3,86 +3,54 @@
 import re
 
 f = """
-                                                                                                                             txf - dt*vxf - (axf*dt^2)/2
-                                                                                                                             tyf - dt*vyf - (ayf*dt^2)/2
-                                                                                                                             ttf - dt*vtf - (atf*dt^2)/2
-                                                                                                                                            vxf - axf*dt
-                                                                                                                                            vyf - ayf*dt
-                                                                                                                                            vtf - atf*dt
-                                                                                                                                                     bxf
-                                                                                                                                                     byf
-                                                                                                                                                     btf
--(dt*(bw*(vtf - (atf*dt)/2) - 2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2) + 2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2)))/rd
- (dt*(2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2) + bw*(vtf - (atf*dt)/2) - 2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2)))/rd
-                                       cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2) + sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2)
-                                           bxf + axf*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf) - ayf*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf) + atf*iy + ix*vtf^2
-                                           byf + ayf*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf) + axf*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf) + atf*ix + iy*vtf^2
-                                                                                                                                               btf + vtf
+tx + (rd*cos(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/2
+ty + (rd*sin(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/2
+                                 tt - (rd*(dwl - dwr))/bw
 """
 
-w = """
-[1, 0,                                                                                                                               0,                                            -dt,                                               0,                                                                                                                                       0, 0, 0, 0,                                         -dt^2/2,                                              0,                                                                                                                                                          0]
-[0, 1,                                                                                                                               0,                                              0,                                             -dt,                                                                                                                                       0, 0, 0, 0,                                               0,                                        -dt^2/2,                                                                                                                                                          0]
-[0, 0,                                                                                                                               1,                                              0,                                               0,                                                                                                                                     -dt, 0, 0, 0,                                               0,                                              0,                                                                                                                                                    -dt^2/2]
-[0, 0,                                                                                                                               0,                                              1,                                               0,                                                                                                                                       0, 0, 0, 0,                                             -dt,                                              0,                                                                                                                                                          0]
-[0, 0,                                                                                                                               0,                                              0,                                               1,                                                                                                                                       0, 0, 0, 0,                                               0,                                            -dt,                                                                                                                                                          0]
-[0, 0,                                                                                                                               0,                                              0,                                               0,                                                                                                                                       1, 0, 0, 0,                                               0,                                              0,                                                                                                                                                        -dt]
-[0, 0,                                                                                                                               0,                                              0,                                               0,                                                                                                                                       0, 1, 0, 0,                                               0,                                              0,                                                                                                                                                          0]
-[0, 0,                                                                                                                               0,                                              0,                                               0,                                                                                                                                       0, 0, 1, 0,                                               0,                                              0,                                                                                                                                                          0]
-[0, 0,                                                                                                                               0,                                              0,                                               0,                                                                                                                                       0, 0, 0, 1,                                               0,                                              0,                                                                                                                                                          0]
-[0, 0, (dt*(2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2) + 2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2)))/rd, (2*dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, -(2*dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, -(dt*(bw + dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2) + dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2)))/rd, 0, 0, 0, -(dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, (dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, -(dt*((dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2))/2 - (bw*dt)/2 + (dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2))/2))/rd]
-[0, 0, (dt*(2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2) + 2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2)))/rd, (2*dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, -(2*dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, -(dt*(dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2) - bw + dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2)))/rd, 0, 0, 0, -(dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, (dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/rd, -(dt*((bw*dt)/2 + (dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2))/2 + (dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2))/2))/rd]
-[0, 0,               sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2) - cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2),           sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf),            cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf),         (dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2))/2 - (dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2))/2, 0, 0, 0,    -(dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/2,   -(dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/2,                        (dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vxf - (axf*dt)/2))/4 - (dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf)*(vyf - (ayf*dt)/2))/4]
-[0, 0,                                             ayf*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf) + axf*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf),                                              0,                                               0,                            2*ix*vtf - (ayf*dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/2 - (axf*dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/2, 1, 0, 0,            cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf),          -sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf),                                                 iy - (ayf*dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/4 - (axf*dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/4]
-[0, 0,                                             ayf*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf) - axf*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf),                                              0,                                               0,                            2*iy*vtf + (axf*dt*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/2 - (ayf*dt*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/2, 0, 1, 0,            sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf),           cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf),                                                 ix + (axf*dt^2*cos((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/4 - (ayf*dt^2*sin((atf*dt^2)/4 + (vtf*dt)/2 - ttf))/4]
-[0, 0,                                                                                                                               0,                                              0,                                               0,                                                                                                                                       1, 0, 0, 1,                                               0,                                              0,                                                                                                                                                          0]
+fj = """
+[1, 0, -(rd*sin(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/2]
+[0, 1,  (rd*cos(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/2]
+[0, 0,                                                     1]
+"""
+
+fju = """
+[(rd*cos(tt - (rd*(dwl - dwr))/(2*bw)))/2 + (rd^2*sin(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/(4*bw), (rd*cos(tt - (rd*(dwl - dwr))/(2*bw)))/2 - (rd^2*sin(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/(4*bw)]
+[(rd*sin(tt - (rd*(dwl - dwr))/(2*bw)))/2 - (rd^2*cos(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/(4*bw), (rd*sin(tt - (rd*(dwl - dwr))/(2*bw)))/2 + (rd^2*cos(tt - (rd*(dwl - dwr))/(2*bw))*(dwl + dwr))/(4*bw)]
+[                                                                                                -rd/bw,                                                                                                  rd/bw]
 """
 
 f = f.strip().replace("\n", ",\n")
-w = w.strip().replace("\n", ",\n").replace("[", "").replace("]", "")
+fj = fj.strip().replace("\n", ",\n").replace("[", "").replace("]", "")
+fju = fju.strip().replace("\n", ",\n").replace("[", "").replace("]", "")
 
 subs = {
-    "dt^2" : "dt*dt",
-    "vtf^2" : "vtf*vtf",
+    "rd^2" : "R*R",
 
-    "dt": "DT",
     "rd": "R",
     "bw": "B",
-    "ix": "IX",
-    "iy": "IY",
 
     "0" : "0.",
     "1" : "1.",
     "2" : "2.",
     "4" : "4.",
+    "16" : "16.",
     
     "cos": "cosf32",
     "sin": "sinf32",
+
+    "tx": "self.state[0]",
+    "ty": "self.state[1]",
+    "tt": "self.state[2]",
 }
 
 for k, v in subs.items():
     f = f.replace(k, v)
-    w = w.replace(k, v)
-
-beta = [
-    "txf",
-    "tyf", 
-    "ttf",
-    "vxf",
-    "vyf",
-    "vtf",
-    "bxf",
-    "byf",
-    "btf",
-    "axf",
-    "ayf",
-    "atf",
-]
-
-for i in range(len(beta)):
-    f = f.replace(beta[i], f"beta[{i}]")
-    w = w.replace(beta[i], f"beta[{i}]")
+    fj = fj.replace(k, v)
+    fju = fju.replace(k, v)
 
 print(re.sub(r"\s+", "", f))
 print("\n")
-print(re.sub(r"\s+", "", w))
+print(re.sub(r"\s+", "", fj))
+print("\n")
+print(re.sub(r"\s+", "", fju))
