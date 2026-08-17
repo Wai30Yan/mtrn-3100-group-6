@@ -5,6 +5,7 @@
 #![feature(unsafe_cell_access)]
 #![feature(core_intrinsics)]
 #![feature(generic_const_exprs)]
+#![feature(result_option_map_or_default)]
 #![feature(clamp_magnitude)]
 
 #[macro_use]
@@ -89,7 +90,10 @@ const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
 const TRAVEL_SPEED: f32 = 0.12;
+const CELL_SIZE: f32 = 0.18;
+
 const ENABLE_LIDAR: bool = true;
+const EXPLORE: bool = false;
 
 enum RelativeMotion {
     Forward,
@@ -313,21 +317,56 @@ fn main() -> ! {
 
     let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0, 0.090), 0.0);
     let motions = [
+        RelativeMotion::Forward,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Left,
         RelativeMotion::Right,
         RelativeMotion::Right,
         RelativeMotion::Forward,
         RelativeMotion::Right,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Left,
+        RelativeMotion::Forward,
         RelativeMotion::Forward,
         RelativeMotion::Right,
-        RelativeMotion::Left,
-        RelativeMotion::Left,
+        RelativeMotion::Right,
         RelativeMotion::Forward,
+        RelativeMotion::Left,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Left,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Left,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Left,
+        RelativeMotion::Right,
+        RelativeMotion::Right,
+        RelativeMotion::Forward,
+        RelativeMotion::Right,
     ];
     let mut solution_step: usize = 0;
 

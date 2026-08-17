@@ -5,7 +5,7 @@ use core::{
 
 use na::{Isometry2, SMatrix, SVector, Translation2, Vector2, Vector3};
 
-use crate::encoder::Encoder;
+use crate::{CELL_SIZE, encoder::Encoder, print};
 
 pub const R: f32 = 0.032;
 pub const B: f32 = 0.083;
@@ -15,8 +15,8 @@ const HIT_WINDOW_L: f32 = 0.030;
 const HIT_WINDOW_W: f32 = 0.030;
 const MAX_HIT_ANGLE: f32 = f32::consts::FRAC_PI_4;
 
-// ~5mm
-const LIDAR_COVAR: f32 = 0.000025;
+// ~10mm
+const LIDAR_COVAR: f32 = 0.0001;
 
 pub struct StateObserver {
     // tx, ty, tt,
@@ -35,7 +35,7 @@ impl StateObserver {
                 pose.translation.y,
                 pose.rotation.angle(),
             ]),
-            covar: SMatrix::from_diagonal(&Vector3::new(30.0025, 0.0025, 0.04)),
+            covar: SMatrix::from_diagonal(&Vector3::new(0.0025, 0.0025, 0.04)),
 
             prev_left: 0.0,
             prev_right: 0.0,
@@ -94,19 +94,22 @@ impl StateObserver {
     pub fn lidar_update(&mut self, distance: f32, pose: Isometry2<f32>) {
         let hit = self.pose() * pose * Translation2::new(distance, 0.0);
         // TODO: disqualify hits in certain zones (edge and obstacles)
-        let wall_x = roundf32(hit.translation.x / 0.180) * 0.180;
-        let wall_y = roundf32(hit.translation.y / 0.180) * 0.180;
+        let wall_x = roundf32(hit.translation.x / CELL_SIZE) * CELL_SIZE;
+        let wall_y = roundf32(hit.translation.y / CELL_SIZE) * CELL_SIZE;
         let hit_angle = hit.rotation.angle().abs();
+        // print!("{:?}\r\n", self.pose());
+        // print!("{:?}\r\n\r\n", pose);
+        print!("{}\r\n{}\r\n{}\r\n\r\n", hit_angle, (hit.translation.x - wall_x).abs(), (hit.translation.y - wall_y).abs());
 
         let (wn, wd) = if (hit.translation.y - wall_y).abs() < HIT_WINDOW_W
             && (hit.translation.x - wall_x).abs() > HIT_WINDOW_L
-            && !(MAX_HIT_ANGLE..f32::consts::PI - MAX_HIT_ANGLE).contains(&hit_angle)
+            && (-MAX_HIT_ANGLE..MAX_HIT_ANGLE).contains(&(hit_angle - f32::consts::FRAC_PI_2))
         {
             // Wall on x-axis (any x, tight y)
             (Vector2::new(0.0, 1.0), wall_y)
         } else if (hit.translation.x - wall_x).abs() < HIT_WINDOW_W
             && (hit.translation.y - wall_y).abs() > HIT_WINDOW_L
-            && (-MAX_HIT_ANGLE..MAX_HIT_ANGLE).contains(&(hit_angle + f32::consts::FRAC_PI_2))
+            && !(MAX_HIT_ANGLE..f32::consts::PI - MAX_HIT_ANGLE).contains(&hit_angle)
         {
             // Wall on y-axis (any y, tight x)
             (Vector2::new(1.0, 0.0), wall_x)
