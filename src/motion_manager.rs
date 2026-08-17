@@ -48,14 +48,17 @@ pub struct MotionManager {
 
 const BASIC_ANGULAR_GAIN: f32 = 50.0;
 const BASIC_LINEAR_GAIN: f32 = 10.0;
-const BASIC_CROSS_GAIN: f32 = 20.0;
+const BASIC_CROSS_GAIN: f32 = 5.0;
 
 const MAX_VELOCITY: f32 = 0.20;
 const MAX_ACCELERATION: f32 = 0.10;
 const MAX_ANGULAR: f32 = 1.5;
 const OVERSHOOT_GAIN: f32 = 0.2;
 
-const EPSILON: f32 = 0.005;
+const GAIN_GAMMA: f32 = 0.3;
+const GAIN_B: f32 = 50.0;
+
+const EPSILON: f32 = 0.01;
 
 impl MotionManager {
     pub fn new(pose: Isometry2<f32>) -> Self {
@@ -88,7 +91,7 @@ impl MotionManager {
                     self.current_pose *= Translation2::new(self.current_speed * DT, 0.0);
                 }
 
-                Self::dumb_follow(
+                Self::ramsete_follow(
                     observed_pose,
                     self.current_pose,
                     ChassisSpeeds {
@@ -128,7 +131,7 @@ impl MotionManager {
                         .append_rotation_wrt_center_mut(&UnitComplex::new(turn_rate * DT));
                 }
 
-                Self::dumb_follow(
+                Self::ramsete_follow(
                     observed_pose,
                     self.current_pose,
                     ChassisSpeeds {
@@ -199,6 +202,25 @@ impl MotionManager {
                 + (BASIC_ANGULAR_GAIN * error.rotation.angle()
                     + BASIC_CROSS_GAIN * error.translation.y)
                     .clamp_magnitude(MAX_ANGULAR * 0.3),
+        }
+    }
+
+    // https://wiki.purduesigbots.com/software/control-algorithms/ramsete
+    fn ramsete_follow(
+        observed_pose: Isometry2<f32>,
+        desired_pose: Isometry2<f32>,
+        desired_speeds: ChassisSpeeds,
+    ) -> ChassisSpeeds {
+        let error = observed_pose.inv_mul(&desired_pose);
+        let k = 2.0
+            * GAIN_GAMMA
+            * f32::hypot(desired_speeds.omega, f32::sqrt(GAIN_B) * desired_speeds.vx);
+        ChassisSpeeds {
+            vx: desired_speeds.vx * error.rotation.cos_angle() + k * error.translation.x,
+            omega: desired_speeds.omega
+                + k * error.rotation.angle()
+                + GAIN_B * desired_speeds.vx * error.rotation.sin_angle() * error.translation.y
+                    / error.rotation.angle(),
         }
     }
 }
