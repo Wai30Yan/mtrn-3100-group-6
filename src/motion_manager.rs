@@ -1,7 +1,7 @@
 use core::matches;
 
 use crate::na::ComplexField;
-use crate::{DT, TRAVEL_SPEED, state_observer};
+use crate::{DT, TRAVEL_SPEED, print, state_observer};
 use na::{Isometry2, Rotation2, Translation2, UnitComplex};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -51,12 +51,12 @@ const BASIC_LINEAR_GAIN: f32 = 5.0;
 const BASIC_CROSS_GAIN: f32 = 10.0;
 
 const MAX_VELOCITY: f32 = TRAVEL_SPEED;
-const MAX_ACCELERATION: f32 = TRAVEL_SPEED / 2.0;
-const MAX_ANGULAR: f32 = 1.5;
+const MAX_ACCELERATION: f32 = TRAVEL_SPEED;
+const MAX_ANGULAR: f32 = 3.0;
 const OVERSHOOT_GAIN: f32 = 0.2;
-const FOLLOW_EPSILON: f32 = 0.005;
+const FOLLOW_EPSILON: f32 = 0.01;
 
-const PIVOT_ANGULAR_GAIN: f32 = 50.0;
+const PIVOT_ANGULAR_GAIN: f32 = 30.0;
 const PIVOT_EPSILON: f32 = 0.03;
 
 impl MotionManager {
@@ -164,6 +164,7 @@ impl MotionManager {
     }
 
     pub fn set_target(&mut self, target: Motion) {
+        print!("{:?}\r\n", target);
         self.target = target;
     }
 

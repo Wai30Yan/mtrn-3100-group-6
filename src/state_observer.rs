@@ -15,8 +15,8 @@ const HIT_WINDOW_L: f32 = 0.030;
 const HIT_WINDOW_W: f32 = 0.030;
 const MAX_HIT_ANGLE: f32 = f32::consts::FRAC_PI_4;
 
-// ~10mm
-const LIDAR_COVAR: f32 = 0.0001;
+// ~5mm
+const LIDAR_COVAR: f32 = 0.000025;
 
 pub struct StateObserver {
     // tx, ty, tt,

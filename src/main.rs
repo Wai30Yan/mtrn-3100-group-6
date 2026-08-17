@@ -94,15 +94,15 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 0.12;
+const TRAVEL_SPEED: f32 = 0.15;
 const CELL_SIZE: f32 = 0.18;
 
 const ENABLE_LIDAR: bool = true;
 const EXPLORE: bool = true;
 
-const START: Point = (2, 4);
+const START: Point = (2, 0);
 const START_H: Heading = Heading::North;
-const END: Point = (1, 1);
+const END: Point = (8, 5);
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -132,7 +132,7 @@ static HEAP: Heap = Heap::empty();
 
 fn initialise_allocator() {
     use core::mem::MaybeUninit;
-    const HEAP_SIZE: usize = 0x4000; // 16 KiB
+    const HEAP_SIZE: usize = 0x2000; // 16 KiB
     static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
     unsafe { HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE) }
 }
@@ -318,7 +318,13 @@ fn main() -> ! {
 
     let mut display = Display::new(RefCellDevice::new(&i2c));
 
-    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.090, 0.090), 0.0);
+    let initial_pose: Isometry2<f32> = Isometry2::new(
+        Vector2::new(
+            CELL_SIZE * (START.0 as f32 + 0.5),
+            CELL_SIZE * -(START.1 as f32 + 0.5),
+        ),
+        f32::consts::FRAC_PI_2,
+    );
     let mut solution: Vec<Motion> = Vec::new();
 
     let mut observer = StateObserver::new(initial_pose);
@@ -366,7 +372,7 @@ fn main() -> ! {
             if let Some(m) = solution.pop() {
                 motion_manager.set_target(m);
             } else if EXPLORE {
-                explorer.step(
+                solution = explorer.step(
                     lidar_l.distance(),
                     lidar_r.distance(),
                     lidar_f.distance(),

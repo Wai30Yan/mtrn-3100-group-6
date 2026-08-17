@@ -6,10 +6,8 @@ use core::{
 
 use na::Rotation2;
 
-use crate::print;
-
-pub const MAP_SIZE: usize = 5;
-pub const CORNER_CUT: usize = 1;
+pub const MAP_SIZE: usize = 9;
+pub const CORNER_CUT: usize = 2;
 pub const LINE_LEN: usize = 6;
 
 pub const FB_SIZE: usize = MAP_SIZE * LINE_LEN + 1;
@@ -119,7 +117,6 @@ impl IndexMut<Heading> for Connections {
 
 impl Map {
     pub fn get_conns(&self, p: Point) -> Connections {
-        print!("{:?}\r\n", p);
         Connections {
             n: self.h_walls[p.0][p.1],
             e: self.v_walls[p.0 + 1][p.1],
