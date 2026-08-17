@@ -20,7 +20,7 @@ where
 }
 
 // 2800 CPR encoder (double since we are using both edges)
-const ENCODER_FACTOR: f32 = 2.0 * f32::consts::PI / 2800.0;
+const ENCODER_FACTOR: f32 = 2.0 * f32::consts::PI / 5600.0;
 
 impl<const A: usize> EncoderInstance<A>
 where
