@@ -114,15 +114,20 @@ Output (real example, from `test_images/maze_fixed_cam.jpg`):
 // absolute world coords (m, rad), maze frame: origin = maze top-left corner,
 // +x = east/right, +y = north/up (down is negative); start = cell (2, 0) facing S
 let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0900, -0.4500), -1.5708); // start cell (2,0) facing S
-let initial_pose: Isometry2<f32> = Isometry2::identity(); // = start cell (2,0) facing S
 // 10 motions, 14 cells; min wall clearance 87 mm
-let solution: &[Motion] = &[
-    Motion::Line { final_position: Translation2::new(0.0900, -0.5400), final_speed: TRAVEL_SPEED },
-    Motion::Arc  { final_pose: Isometry2::new(Vector2::new(0.1800, -0.6300), 0.0000), final_speed: TRAVEL_SPEED },
-    ...
+let solution: Vec<Motion> = vec![  // REVERSE order: the LAST element executes first
     Motion::Line { final_position: Translation2::new(1.5300, -1.1700), final_speed: 0.0 },
+    ...
+    Motion::Arc  { final_pose: Isometry2::new(Vector2::new(0.1800, -0.6300), 0.0000), final_speed: TRAVEL_SPEED },
+    Motion::Line { final_position: Translation2::new(0.0900, -0.5400), final_speed: TRAVEL_SPEED },
 ];
 ```
+
+`solution` is a `Vec<Motion>` in **reverse execution order** (the firmware
+pops from the back; supports dynamic re-planning in the mapping task). On
+hybrid/course runs the list also carries `Motion::DisableLidar` at the
+pre-gate cell (one cell before the pillar zone, so pillars are not read as
+walls) and `Motion::EnableLidar` at the post-gate cell after exiting.
 
 Both `let` lines paste over their `todo!()`s in `micromouse-rs/src/main.rs`,
 then flash. **The frame is fixed to the maze** (agreed 2026-08-12): origin at

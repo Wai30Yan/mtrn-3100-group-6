@@ -1140,11 +1140,16 @@ def solve_hybrid(grid, cylinders, start, goal, region=None, region_cells=5,
                 # direction - aligning to the gate side and then pivoting
                 # again one motion later put two Pivots in a row.
                 align = leg_first_dir(path2, xside)
+                # LIDAR off at the pre-gate cell (one cell before the zone,
+                # per the firmware contract - pillars must not read as
+                # walls), back on at the post-gate cell after exiting.
                 motions = path_to_motions(path1, anchor=start,
                                           start_heading=start[2],
                                           r_turn=r_turn)
+                motions += [("lidar_off",)]
                 motions += course_to_motions(wps, anchor=start,
                                              exit_dir=align)
+                motions += [("lidar_on",)]
                 motions += path_to_motions(path2, anchor=start,
                                            start_heading=align,
                                            r_turn=r_turn)
@@ -1178,12 +1183,20 @@ def leg_first_dir(path, fallback):
 
 
 def collapse_pivots(motions):
-    """Drop a Pivot immediately followed by another Pivot (the later one
+    """Drop a Pivot whose next REAL motion is another Pivot (the later one
     wins - it is the heading the next Line actually needs). Two in-place
-    rotations back to back waste time and stack odometry error."""
-    return [m for i, m in enumerate(motions)
-            if not (m[0] == "pivot" and i + 1 < len(motions)
-                    and motions[i + 1][0] == "pivot")]
+    rotations back to back waste time and stack odometry error. Lidar
+    markers are transparent to the adjacency test and never dropped."""
+    out = []
+    for i, m in enumerate(motions):
+        if m[0] == "pivot":
+            j = i + 1
+            while j < len(motions) and motions[j][0] in LIDAR_MARKERS:
+                j += 1
+            if j < len(motions) and motions[j][0] == "pivot":
+                continue
+        out.append(m)
+    return out
 
 
 def wall_off_cylinders(grid, cylinders, k=K, clear_mm=80.0):
@@ -1986,15 +1999,28 @@ def format_initial_pose(start):
             f"// start cell ({r},{c}) facing {DIR_NAMES[d]}")
 
 
+LIDAR_MARKERS = ("lidar_off", "lidar_on")
+
+
 def format_motions(motions, indent="    "):
-    """Rust literal pastable in place of `let solution: &[Motion] = todo!();`.
+    """Rust literal pastable in place of `let solution: Vec<Motion> = ...;`.
+    Elements are emitted in REVERSE execution order per the firmware
+    contract (the LAST element runs first - it pops from the back).
     final_speed: 0.0 on the last motion and before any Pivot, else the
     firmware's TRAVEL_SPEED constant."""
     parts = []
+    n = len(motions)
     for i, m in enumerate(motions):
-        stop = i == len(motions) - 1 or motions[i + 1][0] == "pivot"
+        j = i + 1                                 # next REAL motion decides
+        while j < n and motions[j][0] in LIDAR_MARKERS:
+            j += 1                                # the stop, not a marker
+        stop = j == n or motions[j][0] == "pivot"
         speed = "0.0" if stop else "TRAVEL_SPEED"
-        if m[0] == "pivot":
+        if m[0] == "lidar_off":
+            parts.append("Motion::DisableLidar")
+        elif m[0] == "lidar_on":
+            parts.append("Motion::EnableLidar")
+        elif m[0] == "pivot":
             parts.append(f"Motion::Pivot {{ rotation: "
                          f"Rotation2::new({m[1]:.4f}) }}")
         elif m[0] == "line":
@@ -2009,9 +2035,10 @@ def format_motions(motions, indent="    "):
                          f"{m[2]:.4f}), {m[3]:.4f}), "
                          f"final_speed: {speed} }}")
     if not parts:
-        return "&[]"
-    inner = (",\n" + indent).join(parts)
-    return "&[\n" + indent + inner + ",\n]"
+        return "vec![]"
+    inner = (",\n" + indent).join(reversed(parts))
+    return ("vec![  // REVERSE order: the LAST element executes first\n"
+            + indent + inner + ",\n]")
 
 
 def simulate_motions(motions, samples_per_m=200, start=(0.0, 0.0, 0.0)):
@@ -2023,6 +2050,8 @@ def simulate_motions(motions, samples_per_m=200, start=(0.0, 0.0, 0.0)):
     x, y, th = start
     pts = [(x, y)]
     for m in motions:
+        if m[0] in LIDAR_MARKERS:               # no motion, sensor toggle
+            continue
         if m[0] == "pivot":
             th = m[1]
             continue

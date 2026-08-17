@@ -7,7 +7,7 @@
 #  proving the solution is image-derived.
 #
 #  Output pastes in place of the todo!() in:
-#      let solution: &[Motion] = todo!();      // micromouse-rs/src/main.rs
+#      let solution: Vec<Motion> = todo!();      // micromouse-rs/src/main.rs
 #  Absolute world coordinates, metres/radians, in a frame fixed to the maze:
 #  origin = the maze's top-left corner, +x = east (image right), +y = north
 #  (image up; south is negative). The firmware seeds odometry with the
@@ -196,7 +196,7 @@ def main():
             print(ml.format_initial_pose(start))
             print(f"// hybrid: maze -> course {rg} -> maze; {len(motions)} "
                   f"motions; min clearance {info['clearance']:.0f} mm")
-            print("let solution: &[Motion] = "
+            print("let solution: Vec<Motion> = "
                   + ml.format_motions(motions) + ";")
             return
         print(f"# hybrid crossing also failed: {info}", file=sys.stderr)
@@ -257,7 +257,7 @@ def main():
     print(ml.format_initial_pose(start))
     print(f"// {len(motions)} motions, {commands.count('f')} cells; "
           f"min wall clearance {clearance:.0f} mm")
-    print("let solution: &[Motion] = " + ml.format_motions(motions) + ";")
+    print("let solution: Vec<Motion> = " + ml.format_motions(motions) + ";")
     if args.flr:
         print(f'// legacy week-8 string: "{commands}"')
 

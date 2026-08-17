@@ -17,7 +17,7 @@
 #  Rust `&[Motion]` array for the whole run - start -> course entry (Arcs,
 #  as in normal maze navigation) -> through the obstacles (Pivot + Line, per
 #  the robot side) -> exit -> goal. Pastes in place of the todo!() in
-#      let solution: &[Motion] = todo!();      // micromouse-rs/src/main.rs
+#      let solution: Vec<Motion> = todo!();      // micromouse-rs/src/main.rs
 #  Absolute world coordinates, metres/radians, in a frame fixed to the maze:
 #  origin = the maze's top-left corner, +x = east (image right), +y = north
 #  (image up; south is negative); firmware seeds odometry from the emitted
@@ -245,8 +245,11 @@ def main():
         motions = ml.path_to_motions(path1, anchor=start,
                                      start_heading=start[2],
                                      r_turn=args.turn_radius)
+        # LIDAR off one cell before the zone, on again after exiting
+        motions += [("lidar_off",)]
         motions += ml.course_to_motions(wps_px, anchor=start,
                                         exit_dir=align)
+        motions += [("lidar_on",)]
         motions += ml.path_to_motions(path2, anchor=start,
                                       start_heading=align,
                                       r_turn=args.turn_radius)
@@ -272,7 +275,7 @@ def main():
           f"obstacles (Pivot+Line) -> exit {(xr, xc)} facing "
           f"{ml.DIR_NAMES[exit_dir]} -> goal {goal}")
     print(f"// {len(motions)} motions; min wall clearance {clearance:.0f} mm")
-    print("let solution: &[Motion] = " + ml.format_motions(motions) + ";")
+    print("let solution: Vec<Motion> = " + ml.format_motions(motions) + ";")
 
     if not args.no_ui:
         cv2.imshow("course - any key to close", vis)

@@ -171,14 +171,19 @@ polarity and a handheld camera.)
 ## 4. Interface contracts with the robot (agree with teammate)
 
 **The interface (agreed with the robot side).** Both tools print a Rust
-`&[Motion]` literal that pastes in place of the `todo!()` in
-`let solution: &[Motion] = todo!();`, using the revised `Motion` enum:
+`Vec<Motion>` literal that pastes in place of the `todo!()` in
+`let solution: Vec<Motion> = todo!();`, in **REVERSE execution order**
+(2026-08-18, per the firmware: the last element runs first — it pops from
+the back, enabling dynamic re-planning in the mapping task). The enum:
 
 ```rust
 enum Motion {
   Line  { final_position: Translation2<f32>, final_speed: f32 },  // straight
   Arc   { final_pose: Isometry2<f32>, final_speed: f32 },         // circular
   Pivot { rotation: Rotation2<f32> },                             // in place
+  DisableLidar,   // inserted at the pre-gate cell, one cell before the
+  EnableLidar,    // pillar zone, and at the post-gate cell after exiting -
+                  // so the pillars are never mistaken for walls
 }
 ```
 
