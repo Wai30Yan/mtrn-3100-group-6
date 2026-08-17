@@ -1,5 +1,4 @@
-use core::fmt::Write;
-
+use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
 use embedded_hal_bus::i2c::RefCellDevice;
 use ssd1306::{
     I2CDisplayInterface, Ssd1306, mode::DisplayConfig, rotation::DisplayRotation,
@@ -29,7 +28,7 @@ pub struct Display<'a> {
             >,
         >,
         DisplaySize128x64,
-        ssd1306::mode::TerminalMode,
+        ssd1306::mode::BufferedGraphicsMode<DisplaySize128x64>,
     >,
 }
 
@@ -40,19 +39,42 @@ impl<'a> Display<'a> {
             DisplaySize128x64,
             DisplayRotation::Rotate0,
         )
-        .into_terminal_mode();
+        .into_buffered_graphics_mode();
         display.init().unwrap();
-        display.clear().unwrap();
+        display.clear(BinaryColor::Off).unwrap();
         Self { display }
     }
 
-    pub fn print(&mut self, text: &str) {
-        for c in text.chars() {
-            self.display.write_char(c).unwrap();
-        }
+    pub fn flush(&mut self) {
+        self.display.flush().unwrap();
     }
 
+    // pub fn print(&mut self, text: &str) {
+    //     for c in text.chars() {
+    //         self.display.write_char(c).unwrap();
+    //     }
+    // }
+
     pub fn clear(&mut self) {
-        self.display.clear().unwrap();
+        self.display.clear(BinaryColor::Off).unwrap();
+    }
+}
+
+impl<'a> DrawTarget for Display<'a> {
+    type Color = BinaryColor;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        let _ = self.display.draw_iter(pixels);
+        Ok(())
+    }
+}
+
+impl<'a> OriginDimensions for Display<'a> {
+    fn size(&self) -> Size {
+        Size::new(128, 64)
     }
 }

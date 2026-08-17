@@ -10,13 +10,14 @@
 #[macro_use]
 extern crate alloc;
 
+use core::f32::consts::FRAC_PI_2;
 use core::{cell::RefCell, f32, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::i2c::RefCellDevice;
-use na::{Isometry2, Translation2, Vector2};
+use na::{Isometry2, Rotation2, Translation2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
@@ -36,8 +37,10 @@ use stm32g4xx_hal::{
 use crate::{
     display::Display,
     encoder::EncoderInstance,
+    explorer::{Explorer, ExplorerAction, ExplorerState},
     imu::Imu,
     lidar::Lidar,
+    map::{Direction, MazeMap},
     motion_manager::{Motion, MotionManager},
     motor::Motor,
     serial::UsbSerial,
@@ -48,8 +51,10 @@ extern crate nalgebra as na;
 
 pub mod display;
 pub mod encoder;
+pub mod explorer;
 pub mod imu;
 pub mod lidar;
+pub mod map;
 pub mod motion_manager;
 pub mod motor;
 pub mod serial;
@@ -123,6 +128,43 @@ fn initialise_allocator() {
     const HEAP_SIZE: usize = 0x4000; // 16 KiB
     static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
     unsafe { HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE) }
+}
+
+const CELL_SIZE_M: f32 = 0.18; // Physical size of one maze cell in meters
+
+/// Converts Explorer high-level commands into continuous 2D Motions
+pub fn action_to_motion(action: ExplorerAction, current_pose: Isometry2<f32>) -> Motion {
+    match action {
+        ExplorerAction::MoveForward => {
+            // Extract just the `.translation` component from the transformed pose
+            let target_translation =
+                (current_pose * Translation2::new(CELL_SIZE_M, 0.0)).translation;
+
+            Motion::Line {
+                final_position: target_translation,
+                final_speed: 0.0,
+            }
+        }
+        ExplorerAction::TurnLeft => {
+            // Compute new angle and wrap inside Rotation2
+            let new_angle = current_pose.rotation.angle() + FRAC_PI_2;
+            let target_rotation = Rotation2::new(new_angle);
+
+            Motion::Pivot {
+                rotation: target_rotation,
+            }
+        }
+        ExplorerAction::TurnRight => {
+            // Compute new angle and wrap inside Rotation2
+            let new_angle = current_pose.rotation.angle() - FRAC_PI_2;
+            let target_rotation = Rotation2::new(new_angle);
+
+            Motion::Pivot {
+                rotation: target_rotation,
+            }
+        }
+        ExplorerAction::Wait => Motion::Idle,
+    }
 }
 
 #[entry]
@@ -307,7 +349,7 @@ fn main() -> ! {
     let mut lidar_f = Lidar::new(RefCellDevice::new(&i2c), lidar_f_en, LIDAR_ADDR_F);
 
     let mut display = Display::new(RefCellDevice::new(&i2c));
-    display.print("Hello World!\n");
+    // display.print("Hello World!\n");
 
     let initial_pose: Isometry2<f32> = Isometry2::identity();
     let solution: &[Motion] = &[];
@@ -325,6 +367,8 @@ fn main() -> ! {
 
         block!(period_timer.wait()).unwrap();
     }
+
+    let mut use_autonomous = true;
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -355,10 +399,10 @@ fn main() -> ! {
         motor_right.set_speed(wr);
 
         display.clear();
-        let p = motion_manager.pose();
-        display.print(&format!("{:?}\n", p.translation.vector[0]));
-        display.print(&format!("{:?}\n", p.translation.vector[1]));
-        display.print(&format!("{:?}\n", p.rotation.angle()));
+        // let p = motion_manager.pose();
+        // display.print(&format!("{:?}\n", p.translation.vector[0]));
+        // display.print(&format!("{:?}\n", p.translation.vector[1]));
+        // display.print(&format!("{:?}\n", p.rotation.angle()));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
@@ -368,5 +412,57 @@ fn main() -> ! {
          * As a result we do not need to run the control loop in an interupt.
          */
         block!(period_timer.wait()).unwrap();
+
+        if use_autonomous {
+            // ------- Task 4.3: For Gride Map and Exploration Engine --------
+            let mut map = MazeMap::<9, 9>::new();
+
+            // X-axis (0 -> 8) Left to Right, Y-axis (0 -> 8) Bottom to Top
+            // (0,0) at Bottom Left, (8,8) at Top Right
+            let mut explorer = Explorer::<9, 9>::new((8, 5), Direction::West);
+
+            const WALL_THRESHOLD_M: f32 = 0.15;
+
+            /*  --------------------------------------------
+            Read raw distances from LiDAR sensors
+            Update Map
+            -------------------------------------------- */
+            let front_dist: Option<f32> = lidar_f.distance();
+            let left_dist: Option<f32> = lidar_l.distance();
+            let right_dist: Option<f32> = lidar_r.distance();
+
+            // Update walls in current cell based on current heading
+            map.update_from_lidars(
+                explorer.current_pos(),
+                explorer.heading(),
+                left_dist,
+                right_dist,
+                front_dist,
+                WALL_THRESHOLD_M,
+            );
+
+            /*  --------------------------------------------
+            Render Map & Status to OLED Display
+            -------------------------------------------- */
+            let _ = map.draw_on_display(&mut display, explorer.current_pos());
+
+            if motion_manager.idle() {
+                let action = explorer.step(&mut map);
+
+                if action != ExplorerAction::Wait {
+                    let target_motion = action_to_motion(action, motion_manager.pose());
+                    motion_manager.set_target(target_motion);
+                }
+            }
+
+            if explorer.state() == ExplorerState::Done {
+                loop {
+                    // Keep rendering display final state
+                    let _ = map.draw_on_display(&mut display, explorer.current_pos());
+                }
+            }
+        } else {
+            // Path Planning Mode
+        }
     }
 }
