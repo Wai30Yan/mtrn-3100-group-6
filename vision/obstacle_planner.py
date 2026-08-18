@@ -69,6 +69,10 @@ def main():
                          "(*_mask_binary/walls/obstacles.png)")
     ap.add_argument("--force", action="store_true",
                     help="emit even when wall detection looks unreliable")
+    ap.add_argument("--no-refine", action="store_true",
+                    help="trust the given corners verbatim (skip boundary/"
+                         "lattice refinement) - use with --corners click "
+                         "when auto-registration fights a sparse maze")
     args = ap.parse_args()
 
     if args.capture is not None:
@@ -113,7 +117,8 @@ def main():
                          f"outside the maze")
 
     corners = get_corners(img, args.corners, args.no_ui)
-    warp, _ = ml.rectify(img, corners, n=args.n)
+    warp, _ = ml.rectify(img, corners, n=args.n,
+                     refine=not args.no_refine)
     if args.rotate:
         warp = np.ascontiguousarray(np.rot90(warp, k=(360 - args.rotate) // 90))
 

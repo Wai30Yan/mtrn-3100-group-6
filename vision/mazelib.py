@@ -412,7 +412,11 @@ def rectify(img, corners, n=9, k=K, refine=True, debug=False):
     T = np.array([[1, 0, pad], [0, 1, pad], [0, 0, 1]], dtype=np.float64)
     coarse = cv2.warpPerspective(img, T @ H, (size + 2 * pad, size + 2 * pad))
     if not refine:
-        return coarse[pad:pad + size, pad:pad + size], H
+        # trusted (clicked) corners: skip the boundary/lattice machinery,
+        # but still lattice-snap away the ±20 px a human click carries
+        return _micro_align(coarse[pad:pad + size, pad:pad + size], n, k,
+                            np.array([[1, 0, -pad], [0, 1, -pad], [0, 0, 1]],
+                                     dtype=np.float64) @ (T @ H), debug)
 
     # STRICT wall mask for boundary finding: near-black acrylic or cyan clips.
     # The adaptive dark threshold (~90) would also pass frame seams/shadows.
@@ -451,7 +455,11 @@ def rectify(img, corners, n=9, k=K, refine=True, debug=False):
             for mf, bf, _sf in far_lines[:4]:
                 near_c = mn_ * centre + bn
                 pitch = (mf * centre + bf - near_c) / n
-                if 0.55 * k < pitch < 1.15 * k:
+                # the coarse quad is at worst the aluminium frame, ~25%
+                # larger than the maze - a pitch under ~0.78k implies a
+                # physically impossible maze-in-frame ratio (an interior-
+                # to-interior pair masquerading as opposite boundaries)
+                if 0.78 * k < pitch < 1.15 * k:
                     out.append((comb_score(near_c, pitch, proj), pitch,
                                 (mn_, bn), (mf, bf)))
         out.sort(key=lambda t: -t[0])
@@ -494,6 +502,20 @@ def rectify(img, corners, n=9, k=K, refine=True, debug=False):
         s = best_synth(px_, "top", "bottom", proj_y)
         if s:
             options.append((sx_ + s[0], s[1], s[2], l_, r_))
+    # Pitch-prior synthesis: on a sparse maze a whole side can lack boundary
+    # walls, so every line pair on that axis is interior-to-interior and its
+    # implied pitch is garbage (seen live: the bottom row fell off the warp
+    # and its walls were read one row up). The autocorrelation of the wall
+    # evidence still knows the true pitch - synthesise both axes' missing
+    # sides one maze-length away at THAT pitch and let the comb score judge.
+    inner = coarse[pad:pad + size, pad:pad + size]
+    p_ax = _evidence_pitch(inner, k, "x")
+    p_ay = _evidence_pitch(inner, k, "y")
+    if p_ax and p_ay and abs(p_ax - p_ay) <= 0.06 * max(p_ax, p_ay):
+        sy2 = best_synth(float(p_ay), "top", "bottom", proj_y)
+        sx2 = best_synth(float(p_ax), "left", "right", proj_x)
+        if sy2 and sx2:
+            options.append((sy2[0] + sx2[0], sy2[1], sy2[2], sx2[1], sx2[2]))
     joint = max(options, key=lambda t: t[0]) if options else None
     if debug:
         import sys
@@ -572,24 +594,23 @@ def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
     # autocorrelation peak of the wall evidence; if the chosen warp
     # disagrees by > 4%, rescale about the centre from the ORIGINAL image,
     # re-snap with a wide search, and let decisiveness arbitrate.
-    p_x = _evidence_pitch(out, k, axis="x")
-    p_y = _evidence_pitch(out, k, axis="y")
-    if p_x and p_y and (abs(p_x - k) > 0.04 * k or abs(p_y - k) > 0.04 * k):
-        sx_, sy_ = k / p_x, k / p_y
-        c0_ = size / 2.0
-        A = np.array([[sx_, 0, c0_ * (1 - sx_)],
-                      [0, sy_, c0_ * (1 - sy_)],
-                      [0, 0, 1]], dtype=np.float64)
-        H_r = A @ H2
-        out_r = cv2.warpPerspective(img, H_r, (size, size))
-        out_r, H_r = _micro_align(out_r, n, k, H_r, debug, span=60)
-        d_old, d_new = _decisiveness(out, n, k), _decisiveness(out_r, n, k)
-        if debug:
-            import sys
-            print(f"# pitch rescue: measured ({p_x},{p_y}) px vs k={k}; "
-                  f"decisiveness {d_old:.4f} -> {d_new:.4f}", file=sys.stderr)
-        if d_new > d_old + 0.02:
-            return out_r, H_r
+    # Sparse-maze rescue: with a boundary side missing, the interior
+    # lattice is periodic and cannot fix ABSOLUTE placement - the comb can
+    # settle on a self-consistent crop that pushes a maze row off the warp
+    # (seen live: the bottom row vanished and its walls were read one row
+    # up). The coarse frame quad still brackets the whole maze, so refit it
+    # with a WIDE per-axis (offset, scale) snap and let decisiveness pick.
+    shift = np.array([[1, 0, -pad], [0, 1, -pad], [0, 0, 1]], dtype=np.float64)
+    out_c, H_c = _micro_align(coarse[pad:pad + size, pad:pad + size].copy(),
+                              n, k, shift @ TH, debug, span=60,
+                              s_lo=0.85, s_hi=1.06)
+    d_old, d_new = _decisiveness(out, n, k), _decisiveness(out_c, n, k)
+    if debug:
+        import sys
+        print(f"# wide coarse refit: decisiveness {d_old:.4f} vs {d_new:.4f}",
+              file=sys.stderr)
+    if d_new > d_old + 0.02:
+        return out_c, H_c
     return out, H2
 
 
@@ -611,7 +632,8 @@ def _evidence_pitch(out, k, axis="x"):
     return best_p
 
 
-def _micro_align(out, n, k, H2, debug=False, span=30):
+def _micro_align(out, n, k, H2, debug=False, span=30,
+                 s_lo=0.96, s_hi=1.041):
     """Final per-axis lattice snap, applied to WHATEVER refinement won: find
     the (offset, scale) that puts the most wall evidence exactly ON the k-px
     lattice lines, and resample. A refinement can be self-consistent yet off
@@ -627,7 +649,7 @@ def _micro_align(out, n, k, H2, debug=False, span=30):
 
     def best_fit(prof):
         best = (0.0, 1.0, -1.0)
-        for scale in np.arange(0.96, 1.041, 0.005):
+        for scale in np.arange(s_lo, s_hi, 0.005):
             for o in range(-span, span + 1):
                 s = 0.0
                 for i in range(n + 1):
