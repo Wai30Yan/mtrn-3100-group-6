@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+tests/synth_out/
+*.corners.json
+capture_cam*.png
+*_overlay.png
+!test_images/maze_fixed_cam_overlay_example.png
+*_mask_*.png
+test_images/path_demos/
+overlay_FAILED.png
+course_FAILED.png
+test_images/hybrid_outputs/
+results/
+results.zip
