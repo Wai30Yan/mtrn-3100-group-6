@@ -18,7 +18,7 @@ use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::i2c::RefCellDevice;
-use na::{Isometry2, Translation2, Vector2};
+use na::{Isometry2, Rotation2, Translation2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
@@ -94,10 +94,9 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 0.15;
+const TRAVEL_SPEED: f32 = 0.16;
 const CELL_SIZE: f32 = 0.18;
 
-const ENABLE_LIDAR: bool = true;
 const EXPLORE: bool = true;
 
 const START: Point = (2, 0);
@@ -132,7 +131,7 @@ static HEAP: Heap = Heap::empty();
 
 fn initialise_allocator() {
     use core::mem::MaybeUninit;
-    const HEAP_SIZE: usize = 0x2000; // 16 KiB
+    const HEAP_SIZE: usize = 0x1_0000; // 64 KiB
     static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
     unsafe { HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE) }
 }
@@ -318,14 +317,20 @@ fn main() -> ! {
 
     let mut display = Display::new(RefCellDevice::new(&i2c));
 
-    let initial_pose: Isometry2<f32> = Isometry2::new(
-        Vector2::new(
-            CELL_SIZE * (START.0 as f32 + 0.5),
-            CELL_SIZE * -(START.1 as f32 + 0.5),
-        ),
-        f32::consts::FRAC_PI_2,
-    );
-    let mut solution: Vec<Motion> = Vec::new();
+    let mut initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0900, -0.4500), 0.0000); // start cell (2,0) facing E
+    // start -> course entry (1, 3) (Arcs) -> 5 obstacles (Pivot+Line) -> exit (5, 7) facing S -> goal (6, 1)
+    // 34 motions; min wall clearance 82 mm
+    let mut solution: Vec<Motion> = vec![];
+
+    if EXPLORE {
+        initial_pose = Isometry2::new(
+            Vector2::new(
+                CELL_SIZE * (START.0 as f32 + 0.5),
+                CELL_SIZE * -(START.1 as f32 + 0.5),
+            ),
+            f32::consts::FRAC_PI_2,
+        );
+    }
 
     let mut observer = StateObserver::new(initial_pose);
     let mut motion_manager = MotionManager::new(initial_pose);
@@ -343,29 +348,28 @@ fn main() -> ! {
 
         observer.update(&encoder_left, &encoder_right);
 
-        if matches!(lidar_l.update(), nb::Result::Ok(()))
-            && let Some(dist) = lidar_l.distance()
-            && ENABLE_LIDAR
-        {
-            observer.lidar_update(
-                dist,
-                Isometry2::new(Vector2::new(0.012, 0.030), f32::consts::FRAC_PI_2),
-            );
-        }
-        if matches!(lidar_r.update(), nb::Result::Ok(()))
-            && let Some(dist) = lidar_r.distance()
-            && ENABLE_LIDAR
-        {
-            observer.lidar_update(
-                dist,
-                Isometry2::new(Vector2::new(0.012, -0.030), -f32::consts::FRAC_PI_2),
-            );
-        }
-        if matches!(lidar_f.update(), nb::Result::Ok(()))
-            && let Some(dist) = lidar_f.distance()
-            && ENABLE_LIDAR
-        {
-            observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
+        if motion_manager.lidar_enabled() {
+            if matches!(lidar_l.update(), nb::Result::Ok(()))
+                && let Some(dist) = lidar_l.distance()
+            {
+                observer.lidar_update(
+                    dist,
+                    Isometry2::new(Vector2::new(0.012, 0.030), f32::consts::FRAC_PI_2),
+                );
+            }
+            if matches!(lidar_r.update(), nb::Result::Ok(()))
+                && let Some(dist) = lidar_r.distance()
+            {
+                observer.lidar_update(
+                    dist,
+                    Isometry2::new(Vector2::new(0.012, -0.030), -f32::consts::FRAC_PI_2),
+                );
+            }
+            if matches!(lidar_f.update(), nb::Result::Ok(()))
+                && let Some(dist) = lidar_f.distance()
+            {
+                observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
+            }
         }
 
         if motion_manager.idle() {

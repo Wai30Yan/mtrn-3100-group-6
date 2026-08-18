@@ -6,17 +6,17 @@ use core::{
 
 use na::Rotation2;
 
-pub const MAP_SIZE: usize = 9;
-pub const CORNER_CUT: usize = 2;
-pub const LINE_LEN: usize = 6;
+pub const MAP_SIZE: u8 = 9;
+pub const CORNER_CUT: u8 = 2;
+pub const LINE_LEN: u8 = 6;
 
-pub const FB_SIZE: usize = MAP_SIZE * LINE_LEN + 1;
+pub const FB_SIZE: u8 = MAP_SIZE * LINE_LEN + 1;
 
-pub type Point = (usize, usize);
+pub type Point = (u8, u8);
 
 pub struct Map {
-    h_walls: [[Option<bool>; MAP_SIZE + 1]; MAP_SIZE],
-    v_walls: [[Option<bool>; MAP_SIZE]; MAP_SIZE + 1],
+    h_walls: [[Option<bool>; (MAP_SIZE + 1) as usize]; MAP_SIZE as usize],
+    v_walls: [[Option<bool>; MAP_SIZE as usize]; (MAP_SIZE + 1) as usize],
 }
 
 #[derive(Debug, Default)]
@@ -118,47 +118,47 @@ impl IndexMut<Heading> for Connections {
 impl Map {
     pub fn get_conns(&self, p: Point) -> Connections {
         Connections {
-            n: self.h_walls[p.0][p.1],
-            e: self.v_walls[p.0 + 1][p.1],
-            s: self.h_walls[p.0][p.1 + 1],
-            w: self.v_walls[p.0][p.1],
+            n: self.h_walls[p.0 as usize][p.1 as usize],
+            e: self.v_walls[(p.0 + 1) as usize][p.1 as usize],
+            s: self.h_walls[p.0 as usize][(p.1 + 1) as usize],
+            w: self.v_walls[p.0 as usize][p.1 as usize],
         }
     }
 
     pub fn set_conns(&mut self, p: Point, conns: Connections) {
         if let Some(n) = conns.n {
-            let c = &mut self.h_walls[p.0][p.1];
+            let c = &mut self.h_walls[p.0 as usize][p.1 as usize];
             if c.is_none() {
                 *c = Some(n);
             }
         }
         if let Some(e) = conns.e {
-            let c = &mut self.v_walls[p.0 + 1][p.1];
+            let c = &mut self.v_walls[(p.0 + 1) as usize][p.1 as usize];
             if c.is_none() {
                 *c = Some(e);
             }
         }
         if let Some(s) = conns.s {
-            let c = &mut self.h_walls[p.0][p.1 + 1];
+            let c = &mut self.h_walls[p.0 as usize][(p.1 + 1) as usize];
             if c.is_none() {
                 *c = Some(s);
             }
         }
         if let Some(w) = conns.w {
-            let c = &mut self.v_walls[p.0][p.1];
+            let c = &mut self.v_walls[p.0 as usize][p.1 as usize];
             if c.is_none() {
                 *c = Some(w);
             }
         }
     }
 
-    pub fn render(&self) -> [[bool; FB_SIZE]; FB_SIZE] {
-        let mut fb = [[false; FB_SIZE]; FB_SIZE];
+    pub fn render(&self) -> [[bool; FB_SIZE as usize]; FB_SIZE as usize] {
+        let mut fb = [[false; FB_SIZE as usize]; FB_SIZE as usize];
 
         // Dots
         for y in 0..MAP_SIZE + 1 {
             for x in 0..MAP_SIZE + 1 {
-                fb[x * LINE_LEN][y * LINE_LEN] = true;
+                fb[(x * LINE_LEN) as usize][(y * LINE_LEN) as usize] = true;
             }
         }
 
@@ -166,11 +166,12 @@ impl Map {
         for y in 0..MAP_SIZE + 1 {
             for x in 0..MAP_SIZE {
                 for i in 1..LINE_LEN {
-                    fb[x * LINE_LEN + i][y * LINE_LEN] = match self.h_walls[x][y] {
-                        Some(true) => false,
-                        Some(false) => true,
-                        None => i % 2 == 0, // Dotted line
-                    };
+                    fb[(x * LINE_LEN + i) as usize][(y * LINE_LEN) as usize] =
+                        match self.h_walls[x as usize][y as usize] {
+                            Some(true) => false,
+                            Some(false) => true,
+                            None => i % 2 == 0, // Dotted line
+                        };
                 }
             }
         }
@@ -179,11 +180,12 @@ impl Map {
         for y in 0..MAP_SIZE {
             for x in 0..MAP_SIZE + 1 {
                 for i in 1..LINE_LEN {
-                    fb[x * LINE_LEN][y * LINE_LEN + i] = match self.v_walls[x][y] {
-                        Some(true) => false,
-                        Some(false) => true,
-                        None => i % 2 == 0, // Dotted line
-                    };
+                    fb[(x * LINE_LEN) as usize][(y * LINE_LEN + i) as usize] =
+                        match self.v_walls[x as usize][y as usize] {
+                            Some(true) => false,
+                            Some(false) => true,
+                            None => i % 2 == 0, // Dotted line
+                        };
                 }
             }
         }
@@ -191,10 +193,10 @@ impl Map {
         // Clear corners
         for y in 0..CORNER_CUT * LINE_LEN {
             for x in 0..(CORNER_CUT * LINE_LEN - y) {
-                fb[x][y] = false;
-                fb[x][FB_SIZE - y - 1] = false;
-                fb[FB_SIZE - x - 1][y] = false;
-                fb[FB_SIZE - x - 1][FB_SIZE - y - 1] = false;
+                fb[x as usize][y as usize] = false;
+                fb[x as usize][(FB_SIZE - y - 1) as usize] = false;
+                fb[(FB_SIZE - x - 1) as usize][y as usize] = false;
+                fb[(FB_SIZE - x - 1) as usize][(FB_SIZE - y - 1) as usize] = false;
             }
         }
 
@@ -233,12 +235,12 @@ impl Default for Map {
             }
         }
 
-        res.v_walls[0] = [Some(false); MAP_SIZE];
-        res.v_walls[MAP_SIZE] = [Some(false); MAP_SIZE];
+        res.v_walls[0] = [Some(false); MAP_SIZE as usize];
+        res.v_walls[MAP_SIZE as usize] = [Some(false); MAP_SIZE as usize];
 
         for i in 0..MAP_SIZE {
-            res.h_walls[i][0] = Some(false);
-            res.h_walls[i][MAP_SIZE] = Some(false);
+            res.h_walls[i as usize][0] = Some(false);
+            res.h_walls[i as usize][MAP_SIZE as usize] = Some(false);
         }
 
         res

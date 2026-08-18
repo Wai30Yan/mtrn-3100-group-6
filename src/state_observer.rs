@@ -93,6 +93,18 @@ impl StateObserver {
 
     pub fn lidar_update(&mut self, distance: f32, pose: Isometry2<f32>) {
         let hit = self.pose() * pose * Translation2::new(distance, 0.0);
+        // Forbidden zone
+
+        if !(-0.01..1.63).contains(&hit.translation.x) {
+            return;
+        }
+        if !(-1.63..0.01).contains(&hit.translation.y) {
+            return;
+        }
+        if (hit.translation.vector - Vector2::new(0.81, -0.81)).norm() > 0.90 {
+            return;
+        }
+
         // TODO: disqualify hits in certain zones (edge and obstacles)
         let wall_x = roundf32(hit.translation.x / CELL_SIZE) * CELL_SIZE;
         let wall_y = roundf32(hit.translation.y / CELL_SIZE) * CELL_SIZE;

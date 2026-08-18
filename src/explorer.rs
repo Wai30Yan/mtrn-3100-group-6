@@ -14,11 +14,12 @@ use crate::{
     print,
 };
 
-const LIDAR_THRESH: f32 = 0.1;
+const LIDAR_THRESH: f32 = 0.15;
 
 enum ExplorerState {
     Begin,
     Nominal,
+    Returning,
     End,
 }
 
@@ -59,11 +60,11 @@ impl Explorer {
 
         if self.map.explored() {
             print!("Complete\r\n");
+            self.state = ExplorerState::Returning;
+            self.bfs(self.p, |p| p == START).2
+        } else if matches!(self.state, ExplorerState::Returning) {
             self.state = ExplorerState::End;
-            let (_, _, mut p1) = self.bfs(self.p, |p| p == START);
-            let (_, _, mut p2) = self.bfs(START, |p| p == END);
-            p2.append(&mut p1);
-            p2
+            self.bfs(START, |p| p == END).2
         } else {
             let (p, h, path) = self.bfs(self.p, |p| {
                 let conns = self.map.get_conns(p);
