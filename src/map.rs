@@ -216,6 +216,30 @@ impl Map {
 
         true
     }
+
+    pub fn total_walls(&self) -> usize {
+        2 * ((MAP_SIZE + 1) as usize) * (MAP_SIZE as usize)
+    }
+
+    pub fn known_walls(&self) -> usize {
+        let mut wall_count = 0;
+        for x in self.h_walls {
+            for y in x {
+                if !y.is_none() {
+                    wall_count += 1;
+                }
+            }
+        }
+        for x in self.v_walls {
+            for y in x {
+                if !y.is_none() {
+                    wall_count += 1;
+                }
+            }
+        }
+
+        wall_count
+    }
 }
 
 impl Default for Map {

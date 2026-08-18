@@ -1784,7 +1784,7 @@ def plan_course(grid, cylinders, region, entry, exit_cell, region_cells=5,
 # ---------------------------------------------------------------------------
 # Motion emission (the week-12 robot interface)
 #
-# The firmware consumes `let solution: &[Motion] = ...;` where Motion is
+# The firmware consumes `let mut solution: &[Motion] = ...;` where Motion is
 #   Line  { final_position: Translation2<f32>, final_speed: f32 }   straight
 #   Arc   { final_pose: Isometry2<f32>, final_speed: f32 }          circular
 #   Pivot { rotation: Rotation2<f32> }                              in place
@@ -1986,7 +1986,7 @@ def save_masks(warp, base, cylinders=None, k=K):
 
 
 def format_initial_pose(start):
-    """Rust literal for `let initial_pose: Isometry2<f32> = todo!();`.
+    """Rust literal for `let mut initial_pose: Isometry2<f32> = todo!();`.
 
     The world frame is fixed to the maze (origin = top-left corner, +x east,
     +y north), so the robot's start pose is NOT the identity: the firmware
@@ -1994,7 +1994,7 @@ def format_initial_pose(start):
     r, c, d = start
     x, y = cell_to_world(r, c)
     th = heading_world(d)
-    return (f"let initial_pose: Isometry2<f32> = "
+    return (f"let mut initial_pose: Isometry2<f32> = "
             f"Isometry2::new(Vector2::new({x:.4f}, {y:.4f}), {th:.4f}); "
             f"// start cell ({r},{c}) facing {DIR_NAMES[d]}")
 
@@ -2003,7 +2003,7 @@ LIDAR_MARKERS = ("lidar_off", "lidar_on")
 
 
 def format_motions(motions, indent="    "):
-    """Rust literal pastable in place of `let solution: Vec<Motion> = ...;`.
+    """Rust literal pastable in place of `let mut solution: Vec<Motion> = ...;`.
     Elements are emitted in REVERSE execution order per the firmware
     contract (the LAST element runs first - it pops from the back).
     final_speed: 0.0 on the last motion and before any Pivot, else the

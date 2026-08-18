@@ -9,7 +9,7 @@ use na::{Rotation2, Translation2};
 use crate::{
     CELL_SIZE, END, START, START_H,
     display::Display,
-    map::{Connections, Heading, Map, Point},
+    map::{Connections, Heading, LINE_LEN, Map, Point},
     motion_manager::Motion,
     print,
 };
@@ -28,6 +28,7 @@ pub struct Explorer {
     p: Point,
     h: Heading,
     state: ExplorerState,
+    starting_unknown: usize,
 }
 
 impl Explorer {
@@ -48,7 +49,29 @@ impl Explorer {
         conns[self.h] = Some(!lidar_f.map_or_default(|d| d < LIDAR_THRESH));
 
         self.map.set_conns(self.p, conns);
-        display.draw(0, 0, self.map.render());
+        let mut fb = self.map.render();
+
+        fb[(self.p.0 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2)]
+            [(self.p.1 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2)] = true;
+        fb[(self.p.0 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) - 1]
+            [(self.p.1 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) - 1] = true;
+        fb[(self.p.0 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) + 1]
+            [(self.p.1 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) - 1] = true;
+        fb[(self.p.0 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) - 1]
+            [(self.p.1 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) + 1] = true;
+        fb[(self.p.0 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) + 1]
+            [(self.p.1 as usize * LINE_LEN as usize) + (LINE_LEN as usize / 2) + 1] = true;
+
+        display.draw(
+            0,
+            0,
+            fb,
+            &format!(
+                "{:.0}%",
+                100.0 * (self.map.known_walls() - self.starting_unknown) as f32
+                    / (self.map.total_walls() - self.starting_unknown) as f32,
+            ),
+        );
 
         if matches!(self.state, ExplorerState::Begin) {
             self.h = self.h.rotl();
@@ -57,14 +80,13 @@ impl Explorer {
                 rotation: self.h.into(),
             }];
         }
-
-        if self.map.explored() {
+        if matches!(self.state, ExplorerState::Returning) {
+            self.state = ExplorerState::End;
+            self.bfs(START, |p| p == END).2
+        } else if self.map.explored() {
             print!("Complete\r\n");
             self.state = ExplorerState::Returning;
             self.bfs(self.p, |p| p == START).2
-        } else if matches!(self.state, ExplorerState::Returning) {
-            self.state = ExplorerState::End;
-            self.bfs(START, |p| p == END).2
         } else {
             let (p, h, path) = self.bfs(self.p, |p| {
                 let conns = self.map.get_conns(p);
@@ -155,11 +177,14 @@ impl Explorer {
 
 impl Default for Explorer {
     fn default() -> Self {
+        let map = Map::default();
+        let starting_unknown = map.known_walls();
         Self {
-            map: Default::default(),
+            map,
             p: START,
             h: START_H,
             state: ExplorerState::Begin,
+            starting_unknown: starting_unknown,
         }
     }
 }

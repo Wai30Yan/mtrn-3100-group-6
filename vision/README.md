@@ -113,9 +113,9 @@ Output (real example, from `test_images/maze_fixed_cam.jpg`):
 // paste in place of the todo!()s in micromouse-rs/src/main.rs
 // absolute world coords (m, rad), maze frame: origin = maze top-left corner,
 // +x = east/right, +y = north/up (down is negative); start = cell (2, 0) facing S
-let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0900, -0.4500), -1.5708); // start cell (2,0) facing S
+let mut initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0900, -0.4500), -1.5708); // start cell (2,0) facing S
 // 10 motions, 14 cells; min wall clearance 87 mm
-let solution: Vec<Motion> = vec![  // REVERSE order: the LAST element executes first
+let mut solution: Vec<Motion> = vec![  // REVERSE order: the LAST element executes first
     Motion::Line { final_position: Translation2::new(1.5300, -1.1700), final_speed: 0.0 },
     ...
     Motion::Arc  { final_pose: Isometry2::new(Vector2::new(0.1800, -0.6300), 0.0000), final_speed: TRAVEL_SPEED },
