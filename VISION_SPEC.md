@@ -172,7 +172,7 @@ polarity and a handheld camera.)
 
 **The interface (agreed with the robot side).** Both tools print a Rust
 `Vec<Motion>` literal that pastes in place of the `todo!()` in
-`let solution: Vec<Motion> = todo!();`, in **REVERSE execution order**
+`let mut solution: Vec<Motion> = todo!();`, in **REVERSE execution order**
 (2026-08-18, per the firmware: the last element runs first — it pops from
 the back, enabling dynamic re-planning in the mapping task). The enum:
 
@@ -227,7 +227,7 @@ non-zero and says why if not — so a pasted array has already been checked
 against the photo it came from.
 
 **`initial_pose`**: the tools also emit
-`let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(x, y), θ);`
+`let mut initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(x, y), θ);`
 for the firmware's second `todo!()` — the start cell's centre and start
 heading in the maze frame (e.g. start (2,0) facing S →
 `Isometry2::new(Vector2::new(0.0900, -0.4500), -1.5708)`). Since odometry

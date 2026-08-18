@@ -1,5 +1,10 @@
-use core::fmt::Write;
-
+use embedded_graphics::{
+    Drawable,
+    geometry::Point,
+    mono_font::{MonoTextStyle, ascii::FONT_6X10},
+    pixelcolor::BinaryColor,
+    text::Text,
+};
 use embedded_hal_bus::i2c::RefCellDevice;
 use ssd1306::{
     I2CDisplayInterface, Ssd1306, mode::DisplayConfig, rotation::DisplayRotation,
@@ -50,7 +55,14 @@ impl<'a> Display<'a> {
         tx: usize,
         ty: usize,
         img: [[bool; Y]; X],
+        msg: &str,
     ) {
+        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+        self.display.clear_buffer();
+        Text::new(msg, Point::new(72, 16), style)
+            .draw(&mut self.display)
+            .unwrap();
+
         for y in 0..Y {
             for x in 0..X {
                 self.display

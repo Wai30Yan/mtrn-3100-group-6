@@ -21,6 +21,7 @@ usb-device = "0.3.2"
 nalgebra = { version = "0.35.0", default-features = false, features = [ "libm", "alloc" ] }
 ssd1306 = "0.10.0"
 embedded-hal-bus = "0.3.0"
+embedded-graphics = "0.8.2"
 
 # allows use of `cargo fix`
 [[bin]]

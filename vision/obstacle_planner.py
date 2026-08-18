@@ -17,7 +17,7 @@
 #  Rust `&[Motion]` array for the whole run - start -> course entry (Arcs,
 #  as in normal maze navigation) -> through the obstacles (Pivot + Line, per
 #  the robot side) -> exit -> goal. Pastes in place of the todo!() in
-#      let solution: Vec<Motion> = todo!();      // micromouse-rs/src/main.rs
+#      let mut solution: Vec<Motion> = todo!();      // micromouse-rs/src/main.rs
 #  Absolute world coordinates, metres/radians, in a frame fixed to the maze:
 #  origin = the maze's top-left corner, +x = east (image right), +y = north
 #  (image up; south is negative); firmware seeds odometry from the emitted
@@ -275,7 +275,7 @@ def main():
           f"obstacles (Pivot+Line) -> exit {(xr, xc)} facing "
           f"{ml.DIR_NAMES[exit_dir]} -> goal {goal}")
     print(f"// {len(motions)} motions; min wall clearance {clearance:.0f} mm")
-    print("let solution: Vec<Motion> = " + ml.format_motions(motions) + ";")
+    print("let mut solution: Vec<Motion> = " + ml.format_motions(motions) + ";")
 
     if not args.no_ui:
         cv2.imshow("course - any key to close", vis)
