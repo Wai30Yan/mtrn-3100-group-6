@@ -564,7 +564,51 @@ def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
         import sys
         print(f"# chose {best[3]} rectification", file=sys.stderr)
     out, H2 = _micro_align(best[1], n, k, best[2], debug)
+
+    # Pitch sanity: a self-consistent comb can lock the WRONG scale when one
+    # boundary side has no walls to anchor on (seen on a sparse lab maze:
+    # the aluminium frame rail became "row 0" and nine rows compressed 13%,
+    # sending the row-0 path onto the frame). The true pitch shows up as the
+    # autocorrelation peak of the wall evidence; if the chosen warp
+    # disagrees by > 4%, rescale about the centre from the ORIGINAL image,
+    # re-snap with a wide search, and let decisiveness arbitrate.
+    p_x = _evidence_pitch(out, k, axis="x")
+    p_y = _evidence_pitch(out, k, axis="y")
+    if p_x and p_y and (abs(p_x - k) > 0.04 * k or abs(p_y - k) > 0.04 * k):
+        sx_, sy_ = k / p_x, k / p_y
+        c0_ = size / 2.0
+        A = np.array([[sx_, 0, c0_ * (1 - sx_)],
+                      [0, sy_, c0_ * (1 - sy_)],
+                      [0, 0, 1]], dtype=np.float64)
+        H_r = A @ H2
+        out_r = cv2.warpPerspective(img, H_r, (size, size))
+        out_r, H_r = _micro_align(out_r, n, k, H_r, debug, span=60)
+        d_old, d_new = _decisiveness(out, n, k), _decisiveness(out_r, n, k)
+        if debug:
+            import sys
+            print(f"# pitch rescue: measured ({p_x},{p_y}) px vs k={k}; "
+                  f"decisiveness {d_old:.4f} -> {d_new:.4f}", file=sys.stderr)
+        if d_new > d_old + 0.02:
+            return out_r, H_r
     return out, H2
+
+
+def _evidence_pitch(out, k, axis="x"):
+    """Dominant lattice pitch of the wall evidence (autocorrelation peak),
+    or None without a clear peak. Sees the TRUE cell size even when the
+    chosen rectification believes a different one."""
+    ev = _wall_evidence(out)
+    size = ev.shape[0]
+    band = slice(int(0.15 * size), int(0.85 * size))
+    prof = (ev[band, :].mean(axis=0) if axis == "x"
+            else ev[:, band].mean(axis=1)).astype(np.float64)
+    prof -= prof.mean()
+    best_p, best_s = None, 0.0
+    for p in range(int(0.75 * k), int(1.26 * k)):
+        s = float(np.dot(prof[:-p], prof[p:]) / (len(prof) - p))
+        if s > best_s:
+            best_p, best_s = p, s
+    return best_p
 
 
 def _micro_align(out, n, k, H2, debug=False, span=30):
@@ -619,8 +663,9 @@ def _micro_align(out, n, k, H2, debug=False, span=30):
 class Grid:
     """Wall map for an n x n maze. walls[r][c] is a 4-bit NESW mask."""
 
-    def __init__(self, n=9, chamfer=1):
+    def __init__(self, n=9, chamfer=1, chamfer_ext=None):
         self.n = n
+        self.chamfer_ext = chamfer_ext if chamfer else None
         self.walls = np.zeros((n, n), dtype=np.uint8)
         self.blocked = np.zeros((n, n), dtype=bool)
         for i in range(n):
@@ -636,6 +681,23 @@ class Grid:
                         or ((n - 1 - r) + c) < chamfer
                         or ((n - 1 - r) + (n - 1 - c)) < chamfer):
                     self.block(r, c)
+        # The REAL rail diagonal is longer than the plate cells (~1.7 cells
+        # measured on a lab capture): it intrudes into the corner-adjacent
+        # edge cells, whose centres end up ~55 mm from the rail - a 75 mm
+        # robot cannot stand there. A teammate's robot proved it by driving
+        # off the maze at a corner. chamfer_ext (in cells) blocks every cell
+        # whose centre is within 80 mm of the extended diagonal.
+        if self.chamfer_ext:
+            safe = (75.0 + 5.0) / CELL_MM       # cells
+            for r in range(n):
+                for c in range(n):
+                    for u, v in ((c + 0.5, r + 0.5),
+                                 (n - 1 - c + 0.5, r + 0.5),
+                                 (c + 0.5, n - 1 - r + 0.5),
+                                 (n - 1 - c + 0.5, n - 1 - r + 0.5)):
+                        if (u + v - self.chamfer_ext) / math.sqrt(2) < safe:
+                            self.block(r, c)
+                            break
 
     def in_bounds(self, r, c):
         return 0 <= r < self.n and 0 <= c < self.n
@@ -691,7 +753,8 @@ def cylinder_mask(shape, cylinders, k=K):
     return m > 0
 
 
-def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055, exclude=None):
+def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055, exclude=None,
+                 chamfer_ext=1.7):
     """Detect walls on a rectified maze image.
 
     The homography maps the FLOOR plane, but the walls are 150 mm tall: a
@@ -718,7 +781,7 @@ def detect_walls(warp, n=9, k=K, chamfer=1, lean_gain=0.055, exclude=None):
     if exclude is not None:
         gray = np.where(exclude, np.nan, gray)   # NaN drops out of the stats
         cyan = cyan & ~exclude
-    grid = Grid(n, chamfer)
+    grid = Grid(n, chamfer, chamfer_ext=chamfer_ext)
     scores = []
     lo = int(k * (1 - EDGE_SPAN) / 2)
     hi = int(k * (1 + EDGE_SPAN) / 2)
@@ -2107,9 +2170,17 @@ def simulate_motions(motions, samples_per_m=200, start=(0.0, 0.0, 0.0)):
 
 
 def wall_segments_world(grid, anchor):
-    """Every present wall as a world-frame segment ((x0,y0),(x1,y1)) metres."""
+    """Every present wall as a world-frame segment ((x0,y0),(x1,y1)) metres.
+    Includes the four chamfer rail diagonals when the grid models them."""
     segs = []
     n = grid.n
+    if grid.chamfer_ext:
+        ext = grid.chamfer_ext * CELL_M
+        L = n * CELL_M
+        segs += [((0.0, -ext), (ext, 0.0)),           # TL corner rail
+                 ((L - ext, 0.0), (L, -ext)),         # TR
+                 ((L, -(L - ext)), (L - ext, -L)),    # BR
+                 ((ext, -L), (0.0, -(L - ext)))]      # BL
     for r in range(n):
         for c in range(n):
             for d in range(4):

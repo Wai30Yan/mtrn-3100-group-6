@@ -71,7 +71,7 @@ def eval_image(png, verbose=True):
         print(f"{os.path.basename(png)}: auto_corners FAILED")
         return dict(ok=False, fp=99, fn=99)
     warp, _ = ml.rectify(img, corners, n=gt.n)
-    det, scores = ml.detect_walls(warp, n=gt.n, chamfer=1)
+    det, scores = ml.detect_walls(warp, chamfer_ext=None, n=gt.n, chamfer=1)
     fp = fn = 0
     bad = []
     for r, c, d in gt.interior_edges():
