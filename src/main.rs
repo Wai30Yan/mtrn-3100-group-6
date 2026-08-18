@@ -103,7 +103,7 @@ For HARDCODING start and goal position
 =====================================   */
 const START_POS: Pos = (8, 5);
 const GOAL_POS: Pos = (0, 5);
-const START_FACING_DIR: Direction = Direction::North;
+const STARTING_DIR: Direction = Direction::North;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -389,7 +389,7 @@ fn main() -> ! {
 
     // X-axis (0 -> 8) Left to Right, Y-axis (0 -> 8) Bottom to Top
     // (0,0) at Bottom Left, (8,8) at Top Right
-    let mut explorer = Explorer::<9, 9>::new(START_POS, GOAL_POS, START_FACING_DIR);
+    let mut explorer = Explorer::<9, 9>::new(START_POS, GOAL_POS, STARTING_DIR);
 
     /*  --------------------------------------------
     Render Map & Status to OLED Display
