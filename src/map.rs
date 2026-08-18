@@ -44,9 +44,11 @@ impl Direction {
             Direction::West => Direction::East,
         }
     }
+}
 
-    pub fn to_wall(self) -> Walls {
-        match self {
+impl From<Direction> for Walls {
+    fn from(dir: Direction) -> Self {
+        match dir {
             Direction::North => Walls::NORTH,
             Direction::East => Walls::EAST,
             Direction::South => Walls::SOUTH,
@@ -110,7 +112,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
             Direction::North => (x, y + 1),
             Direction::East => (x + 1, y),
             Direction::South => (x, y - 1),
-            Direction::West => (x - 1, 1),
+            Direction::West => (x - 1, y),
         };
 
         if nx >= 0 && nx < WIDTH as i16 && ny >= 0 && ny < HEIGHT as i16 {
@@ -124,19 +126,19 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         let (x, y) = (pos.0 as usize, pos.1 as usize);
 
         // bitwise OR to set  the wall bit for (x, y)
-        self.walls[x][y] |= dir.to_wall();
+        self.walls[x][y] |= dir.into();
 
         if let Some(neighbor) = self.neighbor_in_dir(pos, dir) {
             let (nx, ny) = (neighbor.0 as usize, neighbor.1 as usize);
 
             // mirror the wall on neighbor's opposite side
-            self.walls[nx][ny] |= dir.opposite().to_wall();
+            self.walls[nx][ny] |= dir.opposite().into();
         }
     }
 
     pub fn has_wall(&self, pos: Pos, dir: Direction) -> bool {
         let (x, y) = (pos.0 as usize, pos.1 as usize);
-        self.walls[x][y].contains(dir.to_wall())
+        self.walls[x][y].contains(dir.into())
     }
 
     pub fn find_shortest_path(&self, start: Pos, goal: Pos) -> Option<alloc::vec::Vec<Pos>> {
@@ -234,59 +236,116 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         }
     }
 
-    /// Draws 64x64 maze grid on left half of display and completion
-    /// percentage/status bar on the right half
-    pub fn draw_on_display<D>(&self, display: &mut D, robot_pos: Pos) -> Result<(), D::Error>
+    /*  ====================================================
+    FOR DISPLAY
+    Draws 64x64 maze grid on left half of display and completion
+    percentage/status bar on the right half
+    ==================================================== */
+
+    /// 1. Draws a single cell's visited dot
+    pub fn draw_visited<D>(&self, display: &mut D, pos: Pos) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = BinaryColor>,
     {
-        display.clear(BinaryColor::Off)?;
-
         let cell_size = 64 / WIDTH as i32;
+        let px = pos.0 as i32 * cell_size;
+        let py = 63 - ((pos.1 as i32 + 1) * cell_size);
 
-        for x in 0..WIDTH {
-            for y in 0..HEIGHT {
-                let pos = (x as u8, y as u8);
-                let px = x as i32 * cell_size;
-                // Invert Y coordinate so (0,0) sits at bottom-left grid
-                let py = 63 - ((y as i32 + 1) * cell_size);
+        Pixel(
+            Point::new(px + cell_size / 2, py + cell_size / 2),
+            BinaryColor::On,
+        )
+        .draw(display)?;
 
-                // Marks visited cells (centered dot)
-                if self.is_visited(pos) {
-                    Pixel(
-                        Point::new(px + cell_size / 2, py + cell_size / 2),
-                        BinaryColor::On,
-                    )
+        Ok(())
+    }
+
+    /// 2. Draws a single wall segment incrementally when detected
+    pub fn draw_wall<D>(&self, display: &mut D, pos: Pos, dir: Direction) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        let cell_size = 64 / WIDTH as i32;
+        let px = pos.0 as i32 * cell_size;
+        let py = 63 - ((pos.1 as i32 + 1) * cell_size);
+
+        match dir {
+            Direction::North => {
+                Line::new(Point::new(px, py), Point::new(px + cell_size, py))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
                     .draw(display)?;
-                }
-
-                // Draw North Wall
-                if self.has_wall(pos, Direction::North) {
-                    Line::new(Point::new(px, py), Point::new(px + cell_size, py))
-                        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
-                        .draw(display)?;
-                }
-
-                // Draw West Wall
-                if self.has_wall(pos, Direction::West) {
-                    Line::new(Point::new(px, py), Point::new(px, cell_size + py))
-                        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
-                        .draw(display)?;
-                }
+            }
+            Direction::West => {
+                Line::new(Point::new(px, py), Point::new(px, py + cell_size))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                    .draw(display)?;
+            }
+            Direction::South => {
+                Line::new(
+                    Point::new(px, py + cell_size),
+                    Point::new(px + cell_size, py + cell_size),
+                )
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+            }
+            Direction::East => {
+                Line::new(
+                    Point::new(px + cell_size, py),
+                    Point::new(px + cell_size, py + cell_size),
+                )
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
             }
         }
 
-        // For Robot's current position/cell
-        let rx = robot_pos.0 as i32 * cell_size + 2;
-        let ry = 63 - ((robot_pos.1 as i32 + 1) * cell_size) + 2;
+        Ok(())
+    }
+
+    /// 3. Incremental Robot Move: Erases the robot at `old_pos` and draws it at `new_pos`
+    pub fn update_robot_position<D>(
+        &self,
+        display: &mut D,
+        old_pos: Pos,
+        new_pos: Pos,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        let cell_size = 64 / WIDTH as i32;
+
+        // Erase old position
+        let old_rx = old_pos.0 as i32 * cell_size + 2;
+        let old_ry = 63 - ((old_pos.1 as i32 + 1) * cell_size) + 2;
         Rectangle::new(
-            Point::new(rx, ry),
+            Point::new(old_rx, old_ry),
+            Size::new((cell_size - 3) as u32, (cell_size - 3) as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+        .draw(display)?;
+
+        // Re-draw visited dot at old position if visited
+        if self.is_visited(old_pos) {
+            self.draw_visited(display, old_pos)?;
+        }
+
+        // Draw new position
+        let new_rx = new_pos.0 as i32 * cell_size + 2;
+        let new_ry = 63 - ((new_pos.1 as i32 + 1) * cell_size) + 2;
+        Rectangle::new(
+            Point::new(new_rx, new_ry),
             Size::new((cell_size - 3) as u32, (cell_size - 3) as u32),
         )
         .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
         .draw(display)?;
 
-        // Render Status & Completion percentage on Right Half of OLED (X: 68..128)
+        Ok(())
+    }
+
+    /// 4. Updates status bar on the right side of the screen incrementally
+    pub fn update_status_bar<D>(&self, display: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
         let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
         Text::new("MAP STATUS", Point::new(68, 12), text_style).draw(display)?;
@@ -297,12 +356,59 @@ impl<const WIDTH: usize, const HEIGHT: usize> MazeMap<WIDTH, HEIGHT> {
         Text::new(buffer.as_str(), Point::new(68, 28), text_style).draw(display)?;
 
         let bar_width = ((percentage / 100.0) * 50.0) as u32;
+
+        // Clear inside of bar first to avoid drawing artifacts
+        Rectangle::new(Point::new(69, 43), Size::new(50, 8))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+            .draw(display)?;
+
+        // Outline
         Rectangle::new(Point::new(68, 42), Size::new(52, 10))
             .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
             .draw(display)?;
+
+        // Fill progress
         Rectangle::new(Point::new(69, 43), Size::new(bar_width, 8))
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
             .draw(display)?;
+
+        Ok(())
+    }
+
+    /// Full initial draw (used at startup or after a full screen clear)
+    pub fn draw_on_display<D>(&self, display: &mut D, robot_pos: Pos) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        for x in 0..WIDTH {
+            for y in 0..HEIGHT {
+                let pos = (x as u8, y as u8);
+                if self.is_visited(pos) {
+                    self.draw_visited(display, pos)?;
+                }
+
+                if self.has_wall(pos, Direction::North) {
+                    self.draw_wall(display, pos, Direction::North)?;
+                }
+
+                if self.has_wall(pos, Direction::West) {
+                    self.draw_wall(display, pos, Direction::West)?;
+                }
+            }
+        }
+
+        // Render Robot Initial Position
+        let cell_size = 64 / WIDTH as i32;
+        let rx = robot_pos.0 as i32 * cell_size + 2;
+        let ry = 63 - ((robot_pos.1 as i32 + 1) * cell_size) + 2;
+        Rectangle::new(
+            Point::new(rx, ry),
+            Size::new((cell_size - 3) as u32, (cell_size - 3) as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+
+        self.update_status_bar(display)?;
 
         Ok(())
     }

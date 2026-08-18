@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExplorerState {
-    Exploring,
+    NavigatingToGoal,
     ReturningToStart,
     Done,
 }
@@ -12,23 +12,28 @@ pub enum ExplorerState {
 pub enum ExplorerAction {
     TurnLeft,
     TurnRight,
+    TurnAround,
     MoveForward,
     Wait,
 }
 
 pub struct Explorer<const W: usize, const H: usize> {
     current_pos: Pos,
+    start_pos: Pos,
+    goal_pos: Pos,
     heading: Direction,
     state: ExplorerState,
     path: Vec<Pos>,
 }
 
 impl<const W: usize, const H: usize> Explorer<W, H> {
-    pub fn new(start_pos: Pos, start_heading: Direction) -> Self {
+    pub fn new(start_pos: Pos, goal_pos: Pos, start_heading: Direction) -> Self {
         Self {
             current_pos: start_pos,
+            start_pos,
+            goal_pos,
             heading: start_heading,
-            state: ExplorerState::Exploring,
+            state: ExplorerState::NavigatingToGoal,
             path: Vec::new(),
         }
     }
@@ -90,93 +95,66 @@ impl<const W: usize, const H: usize> Explorer<W, H> {
         match self.state {
             ExplorerState::Done => ExplorerAction::Wait,
 
-            ExplorerState::Exploring => {
-                // Find the next unvisited target if there's no (remaining) path
-                if self.path.is_empty() {
-                    if let Some(target) = self.find_next_target(map) {
-                        if let Some(full_path) = map.find_shortest_path(self.current_pos, target) {
-                            // skip robot's current position/cell
-                            self.path = full_path.into_iter().skip(1).collect();
-                        }
-                    } else {
-                        // Entire accessible maze is mapped! Transition to return home
-                        self.state = ExplorerState::ReturningToStart;
-                        return self.step(map);
-                    }
+            ExplorerState::NavigatingToGoal => {
+                if self.current_pos == self.goal_pos {
+                    self.state = ExplorerState::ReturningToStart;
+                    self.path.clear();
+                    return self.step(map);
                 }
 
-                // Get the next cell coordinate in planned path, return Wait if path is empty
-                let Some(&next_cell) = self.path.first() else {
+                if let Some(full_path) = map.find_shortest_path(self.current_pos, self.goal_pos) {
+                    self.path = full_path.into_iter().skip(1).collect();
+                } else {
                     return ExplorerAction::Wait;
-                };
-
-                // Determine which direction the next cell is relative to current position
-                let required_dir = self.direction_to_neighbor(self.current_pos, next_cell);
-
-                match required_dir {
-                    Some(dir) if dir == self.heading => {
-                        // Facing the target cell -> move forward and pop cell from queue
-                        self.path.remove(0);
-                        self.current_pos = next_cell;
-                        ExplorerAction::MoveForward
-                    }
-                    Some(dir) if dir == self.heading.turn_left() => {
-                        self.heading = self.heading.turn_left();
-                        ExplorerAction::TurnLeft
-                    }
-                    Some(dir) if dir == self.heading.turn_right() => {
-                        self.heading = self.heading.turn_right();
-                        ExplorerAction::TurnRight
-                    }
-                    Some(_) => {
-                        self.heading = self.heading.turn_left();
-                        ExplorerAction::TurnLeft
-                    }
-                    None => ExplorerAction::Wait,
                 }
+
+                self.execute_next_move()
             }
 
             ExplorerState::ReturningToStart => {
-                // For hardcoded value for goal cell for navigation
-                if self.current_pos == (0, 5) {
+                // UPDATED! instead of hardcoding here, it'll be passed in constructor via main.rs
+                if self.current_pos == self.start_pos {
                     self.state = ExplorerState::Done;
                     return ExplorerAction::Wait;
                 }
 
-                // Compute shortest path back to start location if path queue is empty
-                if self.path.is_empty() {
-                    if let Some(home_path) = map.find_shortest_path(self.current_pos, (0, 0)) {
-                        self.path = home_path.into_iter().skip(1).collect();
-                    } else {
-                        self.state = ExplorerState::Done;
-                        return ExplorerAction::Wait;
-                    }
+                if let Some(full_path) = map.find_shortest_path(self.current_pos, self.start_pos) {
+                    self.path = full_path.into_iter().skip(1).collect();
+                } else {
+                    return ExplorerAction::Wait;
                 }
 
-                let next_cell = self.path[0];
-                let required_dir = self.direction_to_neighbor(self.current_pos, next_cell);
-
-                match required_dir {
-                    Some(dir) if dir == self.heading => {
-                        self.path.remove(0);
-                        self.current_pos = next_cell;
-                        ExplorerAction::MoveForward
-                    }
-                    Some(dir) if dir == self.heading.turn_left() => {
-                        self.heading = self.heading.turn_left();
-                        ExplorerAction::TurnLeft
-                    }
-                    Some(dir) if dir == self.heading.turn_right() => {
-                        self.heading = self.heading.turn_right();
-                        ExplorerAction::TurnRight
-                    }
-                    Some(_) => {
-                        self.heading = self.heading.turn_left();
-                        ExplorerAction::TurnLeft
-                    }
-                    None => ExplorerAction::Wait,
-                }
+                self.execute_next_move()
             }
+        }
+    }
+
+    fn execute_next_move(&mut self) -> ExplorerAction {
+        let Some(&next_cell) = self.path.first() else {
+            return ExplorerAction::Wait;
+        };
+
+        let required_dir = self.direction_to_neighbor(self.current_pos, next_cell);
+
+        match required_dir {
+            Some(dir) if dir == self.heading => {
+                self.path.remove(0);
+                self.current_pos = next_cell;
+                ExplorerAction::MoveForward
+            }
+            Some(dir) if dir == self.heading.turn_left() => {
+                self.heading = self.heading.turn_left();
+                ExplorerAction::TurnLeft
+            }
+            Some(dir) if dir == self.heading.turn_right() => {
+                self.heading = self.heading.turn_right();
+                ExplorerAction::TurnRight
+            }
+            Some(_) => {
+                self.heading = self.heading.opposite();
+                ExplorerAction::TurnAround
+            }
+            None => ExplorerAction::Wait,
         }
     }
 

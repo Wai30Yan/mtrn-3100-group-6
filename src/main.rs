@@ -10,7 +10,8 @@
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, f32::{self, consts::FRAC_PI_2}, matches, panic::PanicInfo, todo};
+use core::f32::consts::{FRAC_PI_2, PI};
+use core::{cell::RefCell, f32, panic::PanicInfo};
 
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
@@ -39,7 +40,7 @@ use crate::{
     explorer::{Explorer, ExplorerAction, ExplorerState},
     imu::Imu,
     lidar::Lidar,
-    map::{Direction, MazeMap},
+    map::{Direction, MazeMap, Pos},
     motion_manager::{Motion, MotionManager},
     motor::Motor,
     serial::UsbSerial,
@@ -94,7 +95,15 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 0.1;
+const TRAVEL_SPEED: f32 = 1.0;
+const WALL_THRESHOLD_M: f32 = 0.15;
+
+/*  =====================================
+For HARDCODING start and goal position
+=====================================   */
+const START_POS: Pos = (8, 5);
+const GOAL_POS: Pos = (0, 5);
+const START_FACING_DIR: Direction = Direction::North;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -133,6 +142,7 @@ const CELL_SIZE_M: f32 = 0.18; // Physical size of one maze cell in meters
 
 /// Converts Explorer high-level commands into continuous 2D Motions
 pub fn action_to_motion(action: ExplorerAction, current_pose: Isometry2<f32>) -> Motion {
+    let current_rotation = current_pose.rotation.to_rotation_matrix();
     match action {
         ExplorerAction::MoveForward => {
             // Extract just the `.translation` component from the transformed pose
@@ -144,24 +154,15 @@ pub fn action_to_motion(action: ExplorerAction, current_pose: Isometry2<f32>) ->
                 final_speed: 0.0,
             }
         }
-        ExplorerAction::TurnLeft => {
-            // Compute new angle and wrap inside Rotation2
-            let new_angle = current_pose.rotation.angle() + FRAC_PI_2;
-            let target_rotation = Rotation2::new(new_angle);
-
-            Motion::Pivot {
-                rotation: target_rotation,
-            }
-        }
-        ExplorerAction::TurnRight => {
-            // Compute new angle and wrap inside Rotation2
-            let new_angle = current_pose.rotation.angle() - FRAC_PI_2;
-            let target_rotation = Rotation2::new(new_angle);
-
-            Motion::Pivot {
-                rotation: target_rotation,
-            }
-        }
+        ExplorerAction::TurnLeft => Motion::Pivot {
+            rotation: current_rotation * Rotation2::new(FRAC_PI_2),
+        },
+        ExplorerAction::TurnRight => Motion::Pivot {
+            rotation: current_rotation * Rotation2::new(-FRAC_PI_2),
+        },
+        ExplorerAction::TurnAround => Motion::Pivot {
+            rotation: current_rotation * Rotation2::new(PI),
+        },
         ExplorerAction::Wait => Motion::Idle,
     }
 }
@@ -384,6 +385,16 @@ fn main() -> ! {
     }
 
     let mut use_autonomous = true;
+    let mut map = MazeMap::<9, 9>::new();
+
+    // X-axis (0 -> 8) Left to Right, Y-axis (0 -> 8) Bottom to Top
+    // (0,0) at Bottom Left, (8,8) at Top Right
+    let mut explorer = Explorer::<9, 9>::new(START_POS, GOAL_POS, START_FACING_DIR);
+
+    /*  --------------------------------------------
+    Render Map & Status to OLED Display
+    -------------------------------------------- */
+    let _ = map.draw_on_display(&mut display, explorer.current_pos());
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -431,16 +442,11 @@ fn main() -> ! {
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
 
-        /*display.clear();
-        let p = motion_manager.pose();
-        let a = observer.pose();
-        display.print(&format!("{:?}\n", p.translation.vector[0]));
-        display.print(&format!("{:?}\n", p.translation.vector[1]));
-        display.print(&format!("{:?}\n", p.rotation.angle()));
-        display.print(&format!("{:?}\n", a.translation.vector[0]));
-        display.print(&format!("{:?}\n", a.translation.vector[1]));
-        display.print(&format!("{:?}\n", a.rotation.angle()));
-        */
+        // display.clear();
+        // let p = motion_manager.pose();
+        // display.print(&format!("{:?}\n", p.translation.vector[0]));
+        // display.print(&format!("{:?}\n", p.translation.vector[1]));
+        // display.print(&format!("{:?}\n", p.rotation.angle()));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
@@ -449,17 +455,11 @@ fn main() -> ! {
          *
          * As a result we do not need to run the control loop in an interupt.
          */
-        block!(period_timer.wait()).unwrap();
-
         if use_autonomous {
             // ------- Task 4.3: For Gride Map and Exploration Engine --------
-            let mut map = MazeMap::<9, 9>::new();
 
-            // X-axis (0 -> 8) Left to Right, Y-axis (0 -> 8) Bottom to Top
-            // (0,0) at Bottom Left, (8,8) at Top Right
-            let mut explorer = Explorer::<9, 9>::new((8, 5), Direction::West);
-
-            const WALL_THRESHOLD_M: f32 = 0.15;
+            let old_pos = explorer.current_pos();
+            let was_visited = map.is_visited(old_pos);
 
             /*  --------------------------------------------
             Read raw distances from LiDAR sensors
@@ -469,38 +469,70 @@ fn main() -> ! {
             let left_dist: Option<f32> = lidar_l.distance();
             let right_dist: Option<f32> = lidar_r.distance();
 
+            let heading = explorer.heading();
+            let has_front_wall = map.has_wall(old_pos, heading);
+            let has_left_wall = map.has_wall(old_pos, heading.turn_left());
+            let has_right_wall = map.has_wall(old_pos, heading.turn_right());
+
             // Update walls in current cell based on current heading
             map.update_from_lidars(
-                explorer.current_pos(),
-                explorer.heading(),
+                old_pos,
+                heading,
                 left_dist,
                 right_dist,
                 front_dist,
                 WALL_THRESHOLD_M,
             );
 
-            /*  --------------------------------------------
-            Render Map & Status to OLED Display
+            /* --------------------------------------------
+            Incremental OLED Display Updates (Only draw what changed)
             -------------------------------------------- */
-            let _ = map.draw_on_display(&mut display, explorer.current_pos());
+            // 1. Draw visited dot if newly visited
+            if !was_visited && map.is_visited(old_pos) {
+                let _ = map.draw_visited(&mut display, old_pos);
+            }
 
+            // 2. Draw newly detected walls incrementally
+            if !has_front_wall && map.has_wall(old_pos, heading) {
+                let _ = map.draw_wall(&mut display, old_pos, heading);
+            }
+            if !has_left_wall && map.has_wall(old_pos, heading.turn_left()) {
+                let _ = map.draw_wall(&mut display, old_pos, heading.turn_left());
+            }
+            if !has_right_wall && map.has_wall(old_pos, heading.turn_right()) {
+                let _ = map.draw_wall(&mut display, old_pos, heading.turn_right());
+            }
+
+            /* --------------------------------------------
+            Exploration Step & Robot Motion
+            -------------------------------------------- */
             if motion_manager.idle() {
                 let action = explorer.step(&mut map);
 
                 if action != ExplorerAction::Wait {
                     let target_motion = action_to_motion(action, motion_manager.pose());
                     motion_manager.set_target(target_motion);
+
+                    let new_pos = explorer.current_pos();
+
+                    if old_pos != new_pos {
+                        let _ = map.update_robot_position(&mut display, old_pos, new_pos);
+                        let _ = map.update_status_bar(&mut display);
+                    }
                 }
             }
 
             if explorer.state() == ExplorerState::Done {
+                // Keep rendering display final state
+                let _ = map.update_status_bar(&mut display);
                 loop {
-                    // Keep rendering display final state
-                    let _ = map.draw_on_display(&mut display, explorer.current_pos());
+                    // IDLE LOOP
                 }
             }
         } else {
             // Path Planning Mode
         }
+
+        block!(period_timer.wait()).unwrap();
     }
 }
