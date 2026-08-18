@@ -29,7 +29,7 @@ pub struct Display<'a> {
             >,
         >,
         DisplaySize128x64,
-        ssd1306::mode::TerminalMode,
+        ssd1306::mode::BufferedGraphicsMode<DisplaySize128x64>,
     >,
 }
 
@@ -40,19 +40,23 @@ impl<'a> Display<'a> {
             DisplaySize128x64,
             DisplayRotation::Rotate0,
         )
-        .into_terminal_mode();
+        .into_buffered_graphics_mode();
         display.init().unwrap();
-        display.clear().unwrap();
         Self { display }
     }
 
-    pub fn print(&mut self, text: &str) {
-        for c in text.chars() {
-            self.display.write_char(c).unwrap();
+    pub fn draw<const X: usize, const Y: usize>(
+        &mut self,
+        tx: usize,
+        ty: usize,
+        img: [[bool; Y]; X],
+    ) {
+        for y in 0..Y {
+            for x in 0..X {
+                self.display
+                    .set_pixel((tx + x) as u32, (ty + y) as u32, img[x][y]);
+            }
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.display.clear().unwrap();
+        self.display.flush().unwrap();
     }
 }

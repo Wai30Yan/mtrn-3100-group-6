@@ -13,11 +13,12 @@ extern crate alloc;
 
 use core::{cell::RefCell, f32, matches, panic::PanicInfo};
 
+use alloc::vec::Vec;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use cortex_m_rt::entry;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::i2c::RefCellDevice;
-use na::{Isometry2, Translation2, Vector2};
+use na::{Isometry2, Rotation2, Translation2, Vector2};
 use nb::block;
 use stm32g4::stm32g431::{CorePeripherals, NVIC, Peripherals};
 use stm32g4xx_hal::{
@@ -37,7 +38,9 @@ use stm32g4xx_hal::{
 use crate::{
     display::Display,
     encoder::EncoderInstance,
+    explorer::Explorer,
     lidar::Lidar,
+    map::{Heading, Point},
     motion_manager::{Motion, MotionManager},
     motor::Motor,
     serial::UsbSerial,
@@ -48,7 +51,9 @@ extern crate nalgebra as na;
 
 pub mod display;
 pub mod encoder;
+pub mod explorer;
 pub mod lidar;
+pub mod map;
 pub mod motion_manager;
 pub mod motor;
 pub mod serial;
@@ -89,17 +94,14 @@ const LIDAR_ADDR_L: u8 = 0x27;
 const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
-const TRAVEL_SPEED: f32 = 0.12;
+const TRAVEL_SPEED: f32 = 0.16;
 const CELL_SIZE: f32 = 0.18;
 
-const ENABLE_LIDAR: bool = true;
-const EXPLORE: bool = false;
+const EXPLORE: bool = true;
 
-enum RelativeMotion {
-    Forward,
-    Left,
-    Right,
-}
+const START: Point = (2, 0);
+const START_H: Heading = Heading::North;
+const END: Point = (8, 5);
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -129,7 +131,7 @@ static HEAP: Heap = Heap::empty();
 
 fn initialise_allocator() {
     use core::mem::MaybeUninit;
-    const HEAP_SIZE: usize = 0x4000; // 16 KiB
+    const HEAP_SIZE: usize = 0x1_0000; // 64 KiB
     static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
     unsafe { HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE) }
 }
@@ -315,66 +317,25 @@ fn main() -> ! {
 
     let mut display = Display::new(RefCellDevice::new(&i2c));
 
-    let initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0, 0.090), 0.0);
-    let motions = [
-        RelativeMotion::Forward,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Left,
-        RelativeMotion::Right,
-        RelativeMotion::Right,
-        RelativeMotion::Forward,
-        RelativeMotion::Right,
-    ];
-    let mut solution_step: usize = 0;
+    let mut initial_pose: Isometry2<f32> = Isometry2::new(Vector2::new(0.0900, -0.4500), 0.0000); // start cell (2,0) facing E
+    // start -> course entry (1, 3) (Arcs) -> 5 obstacles (Pivot+Line) -> exit (5, 7) facing S -> goal (6, 1)
+    // 34 motions; min wall clearance 82 mm
+    let mut solution: Vec<Motion> = vec![];
+
+    if EXPLORE {
+        initial_pose = Isometry2::new(
+            Vector2::new(
+                CELL_SIZE * (START.0 as f32 + 0.5),
+                CELL_SIZE * -(START.1 as f32 + 0.5),
+            ),
+            f32::consts::FRAC_PI_2,
+        );
+    }
 
     let mut observer = StateObserver::new(initial_pose);
     let mut motion_manager = MotionManager::new(initial_pose);
-
-    display.print("General Initialisation Complete!\n");
-    delay.delay_ms(500);
+    let mut explorer = Explorer::default();
+    delay.delay_ms(100);
 
     /*
      * Because we are not building on top of any framework, everything goes into
@@ -387,55 +348,41 @@ fn main() -> ! {
 
         observer.update(&encoder_left, &encoder_right);
 
-        if matches!(lidar_l.update(), nb::Result::Ok(()))
-            && let Some(dist) = lidar_l.distance()
-            && ENABLE_LIDAR
-        {
-            observer.lidar_update(
-                dist,
-                Isometry2::new(Vector2::new(0.012, 0.030), f32::consts::FRAC_PI_2),
-            );
-        }
-        if matches!(lidar_r.update(), nb::Result::Ok(()))
-            && let Some(dist) = lidar_r.distance()
-            && ENABLE_LIDAR
-        {
-            observer.lidar_update(
-                dist,
-                Isometry2::new(Vector2::new(0.012, -0.030), -f32::consts::FRAC_PI_2),
-            );
-        }
-        if matches!(lidar_f.update(), nb::Result::Ok(()))
-            && let Some(dist) = lidar_f.distance()
-            && ENABLE_LIDAR
-        {
-            observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
+        if motion_manager.lidar_enabled() {
+            if matches!(lidar_l.update(), nb::Result::Ok(()))
+                && let Some(dist) = lidar_l.distance()
+            {
+                observer.lidar_update(
+                    dist,
+                    Isometry2::new(Vector2::new(0.012, 0.030), f32::consts::FRAC_PI_2),
+                );
+            }
+            if matches!(lidar_r.update(), nb::Result::Ok(()))
+                && let Some(dist) = lidar_r.distance()
+            {
+                observer.lidar_update(
+                    dist,
+                    Isometry2::new(Vector2::new(0.012, -0.030), -f32::consts::FRAC_PI_2),
+                );
+            }
+            if matches!(lidar_f.update(), nb::Result::Ok(()))
+                && let Some(dist) = lidar_f.distance()
+            {
+                observer.lidar_update(dist, Isometry2::new(Vector2::new(0.033, 0.0), 0.0));
+            }
         }
 
-        if motion_manager.idle() && solution_step < motions.len() {
-            let speed = if solution_step == motions.len() - 1 {
-                0.0
-            } else {
-                TRAVEL_SPEED
-            };
-            motion_manager.set_target(match motions[solution_step] {
-                RelativeMotion::Forward => Motion::Line {
-                    final_position: (motion_manager.pose() * Translation2::new(0.180, 0.0))
-                        .translation,
-                    final_speed: speed,
-                },
-                RelativeMotion::Left => Motion::Arc {
-                    final_pose: motion_manager.pose()
-                        * Isometry2::new(Vector2::new(0.090, 0.090), f32::consts::FRAC_PI_2),
-                    final_speed: speed,
-                },
-                RelativeMotion::Right => Motion::Arc {
-                    final_pose: motion_manager.pose()
-                        * Isometry2::new(Vector2::new(0.090, -0.090), -f32::consts::FRAC_PI_2),
-                    final_speed: speed,
-                },
-            });
-            solution_step += 1;
+        if motion_manager.idle() {
+            if let Some(m) = solution.pop() {
+                motion_manager.set_target(m);
+            } else if EXPLORE {
+                solution = explorer.step(
+                    lidar_l.distance(),
+                    lidar_r.distance(),
+                    lidar_f.distance(),
+                    &mut display,
+                );
+            }
         }
 
         let desired = motion_manager.update(observer.pose());
@@ -443,15 +390,6 @@ fn main() -> ! {
 
         motor_left.set_speed(wl);
         motor_right.set_speed(wr);
-
-        let error = motion_manager.pose() / observer.pose();
-        display.clear();
-        display.print(&format!(
-            "{:.2}\n{:.2}\n{:.2}\n",
-            error.translation.x,
-            error.translation.y,
-            error.rotation.angle(),
-        ));
 
         /*
          * This MCU is extreme overkill so it is fine to assume that we can
