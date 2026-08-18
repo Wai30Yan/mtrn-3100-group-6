@@ -96,7 +96,7 @@ const LIDAR_ADDR_R: u8 = 0x28;
 const LIDAR_ADDR_F: u8 = 0x29;
 
 const TRAVEL_SPEED: f32 = 1.0;
-const WALL_THRESHOLD_M: f32 = 0.15;
+const WALL_THRESHOLD_M: f32 = 0.05;
 
 /*  =====================================
 For HARDCODING start and goal position
