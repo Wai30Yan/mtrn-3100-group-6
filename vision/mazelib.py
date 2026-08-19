@@ -1974,9 +1974,12 @@ def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
     Straight runs become one combined Line; each 90-degree turn becomes an
     Arc of radius r_turn entered r_turn before the turn-cell centre and
     exited r_turn after (r_turn = half a cell keeps the robot >= 75 mm from
-    both the inside corner post and the outer walls). Consecutive
-    same-sense arcs with no straight between merge (U-turns become one
-    180-degree Arc). A Pivot is emitted first if the robot's heading
+    both the inside corner post and the outer walls). U-turns stay as TWO
+    90-degree Arcs: a single 180-degree Arc's turn direction is ambiguous
+    (the firmware derives it from the sign of the heading delta, and at
+    exactly +/-pi rounding makes that sign a coin-flip - seen live: the
+    robot U-turned right instead of left and hit the wall). A Pivot is
+    emitted first if the robot's heading
     (start_heading; None = unknown, always pivot) doesn't match the first
     leg. Returns [("pivot", theta) | ("line", x, y) | ("arc", x, y, theta)],
     all in the fixed maze frame (pivot theta = absolute target heading; arc
@@ -2024,15 +2027,7 @@ def path_to_motions(cells, anchor, start_heading=None, r_turn=0.09):
             arc_end = (pts[b][0] + r_turn * v[0], pts[b][1] + r_turn * v[1])
             exit_th = heading_world(runs[j + 1][0])
             sense = 1 if runs[j + 1][0] == (d + 3) % 4 else -1
-            # merge with the previous motion if it is a same-sense arc that
-            # ended exactly where this one starts (U-turn)
-            if motions and motions[-1][0] == "arc" and motions[-1][4] == sense \
-                    and math.hypot(pos[0] - motions[-1][1],
-                                   pos[1] - motions[-1][2]) < 1e-6 \
-                    and abs(gap) < 1e-6:
-                motions[-1] = ("arc", arc_end[0], arc_end[1], exit_th, sense)
-            else:
-                motions.append(("arc", arc_end[0], arc_end[1], exit_th, sense))
+            motions.append(("arc", arc_end[0], arc_end[1], exit_th, sense))
             pos = arc_end
     return [m[:4] if m[0] == "arc" else m for m in motions]
 
