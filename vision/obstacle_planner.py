@@ -136,6 +136,8 @@ def main():
             f"scored ambiguously (good captures stay under ~15). The warp "
             f"probably failed - retry with --corners click, or pass --force "
             f"to emit anyway at your own risk.")
+    if not args.no_ui:
+        grid = ml.review_walls(warp, grid, scores)
     exit_sides = []
     for d in range(4):
         r2, c2 = xr + ml.DR[d], xc + ml.DC[d]
