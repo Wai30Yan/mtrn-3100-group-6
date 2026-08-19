@@ -567,9 +567,16 @@ def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
                                       [pad + size, pad + size],
                                       [pad, pad + size]], dtype=np.float32)))
     best = None
+    # the coarse quad (frame outline) CONTAINS the maze - a refined quad
+    # escaping it is a physical impossibility (seen live: an aliased
+    # boundary synthesis slid 2 cells right, past the frame rail, and won
+    # on decisiveness because rail edges score as wall evidence)
+    lo, hi = pad - 0.35 * k, pad + size + 0.35 * k
     for name, q in cands:
         sides = [np.linalg.norm(q[i] - q[(i + 1) % 4]) for i in range(4)]
         if not all(0.55 * size < s < 1.15 * size for s in sides):
+            continue
+        if not (lo <= q.min() and q.max() <= hi):
             continue
         orig = cv2.perspectiveTransform(q.reshape(-1, 1, 2).astype(np.float64), Hinv)
         H2 = cv2.getPerspectiveTransform(orig.reshape(4, 2).astype(np.float32), dst)
@@ -610,8 +617,41 @@ def _pick_rectification(img, coarse, quad, TH, dst, n, k, pad, size, debug):
         print(f"# wide coarse refit: decisiveness {d_old:.4f} vs {d_new:.4f}",
               file=sys.stderr)
     if d_new > d_old + 0.02:
-        return out_c, H_c
-    return out, H2
+        out, H2 = out_c, H_c
+    return _frame_recenter(img, out, H2, TH, n, k, pad, size, debug)
+
+
+def _frame_recenter(img, out, H2, TH, n, k, pad, size, debug):
+    """Absolute-placement fix decisiveness cannot make: a lattice-aligned
+    warp can still sit a whole cell off (seen live: the top frame rail read
+    as row 0 and the real bottom row fell off the warp - decisiveness was a
+    coin-flip, 0.4739 vs 0.4740). Geometry is not: the frame rail borders
+    the maze on ALL sides, so the footprint must leave a margin against the
+    coarse frame quad on every side. Shift whole cells to balance margins."""
+    corners = np.array([[0, 0], [size, 0], [size, size], [0, size]],
+                       dtype=np.float64).reshape(-1, 1, 2)
+    orig = cv2.perspectiveTransform(corners, np.linalg.inv(H2))
+    fq = cv2.perspectiveTransform(orig, TH).reshape(4, 2)
+    px = (fq[:, 0].max() - fq[:, 0].min()) / n   # footprint pitch, coarse px
+    py = (fq[:, 1].max() - fq[:, 1].min()) / n
+
+    def best_shift(lo_m, hi_m, p):
+        # margin pair after shifting d cells; keep the most balanced one,
+        # with a bias to d=0 so well-registered mazes never move
+        opts = [(min(lo_m + d * p, hi_m - d * p) - (0.05 * p if d else 0), d)
+                for d in (-1, 0, 1)]
+        return max(opts)[1]
+
+    dx = best_shift(fq[:, 0].min() - pad, pad + size - fq[:, 0].max(), px)
+    dy = best_shift(fq[:, 1].min() - pad, pad + size - fq[:, 1].max(), py)
+    if dx == 0 and dy == 0:
+        return out, H2
+    if debug:
+        import sys
+        print(f"# frame recenter: shifting ({dx}, {dy}) cells", file=sys.stderr)
+    S = np.array([[1, 0, -dx * k], [0, 1, -dy * k], [0, 0, 1]],
+                 dtype=np.float64)
+    return cv2.warpPerspective(img, S @ H2, (size, size)), S @ H2
 
 
 def _evidence_pitch(out, k, axis="x"):
